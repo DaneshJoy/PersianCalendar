@@ -36,7 +36,7 @@
 
 ## نصب
 
-1. نصب‌کننده‌ی **NSIS** را دانلود و اجرا کنید
+1. نصب‌کننده‌ی **NSIS** را از [Releases](https://github.com/DaneshJoy/PersianCalendar/releases/latest) دانلود و اجرا کنید
    (`PersianCalendar_1.0.0_x64-setup.exe`).
 2. نصب برای **کاربر جاری** انجام می‌شود و به دسترسی Administrator نیاز ندارد.
 3. برنامه را اجرا کنید؛ آیکون آن در ناحیه‌ی System Tray  ظاهر می‌شود.
