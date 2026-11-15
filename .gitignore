@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.cargo/
+src-tauri/target/
+src-tauri/gen/
+release/
+.artifacts/
+*.log
+.DS_Store
+Thumbs.db
+.vite/
+.tauri/

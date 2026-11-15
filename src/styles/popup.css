@@ -1,0 +1,217 @@
+/* ==================================================================
+   Popup flyout (344 × 424 window): header, weekday row, day grid,
+   one-line footer, hover tooltip, toast and the day context menu.
+   ================================================================== */
+
+.popup {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px 8px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  /* The window is exactly the card size, so an outer flyout shadow cannot fade
+     out inside it: it gets clipped by the rectangular window edge and shows as
+     sharp-cornered smudges over the desktop. A subtle inset ring replaces it. */
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+  animation: fade-in var(--dur) var(--ease);
+}
+
+/* ------------------------------------------------------------------ */
+/* Header                                                              */
+/* ------------------------------------------------------------------ */
+
+.popup__header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  margin-bottom: 2px;
+}
+
+.popup__title {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.popup__title:hover {
+  background: var(--surface-hover);
+}
+
+.popup__title:active {
+  background: var(--surface-active);
+}
+
+/* ------------------------------------------------------------------ */
+/* Weekday row + grid                                                  */
+/* ------------------------------------------------------------------ */
+
+.popup__weekdays,
+.popup__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.popup.has-week-numbers .popup__weekdays,
+.popup.has-week-numbers .popup__grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr)) 18px;
+}
+
+.popup__weekdays {
+  height: 20px;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.popup__grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: repeat(var(--rows, 6), minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 2px;
+  touch-action: none;
+}
+
+/* Day cell sizing lives in calendar.css; only flyout-specific tweaks here. */
+.popup .day {
+  font-size: 13.5px;
+}
+
+.popup .day__num {
+  min-width: 26px;
+  height: 26px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer (single line, reserved height to avoid layout jumps)         */
+/* ------------------------------------------------------------------ */
+
+.popup__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 2px 4px 0;
+}
+
+.popup__footer-text {
+  max-width: 100%;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.popup__footer--offline .popup__footer-text {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------------ */
+/* Hover tooltip                                                       */
+/* ------------------------------------------------------------------ */
+
+.tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: 236px;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease), visibility var(--dur-fast) var(--ease);
+}
+
+.tooltip.is-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.tooltip__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.tooltip__line {
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.tooltip__line--holiday {
+  color: var(--holiday);
+}
+
+.tooltip__line--event {
+  margin-top: 3px;
+}
+
+.tooltip__line--event::before {
+  content: "•";
+  margin-inline-end: 4px;
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Toast («کپی شد»)                                                    */
+/* ------------------------------------------------------------------ */
+
+.toast {
+  position: absolute;
+  bottom: 34px;
+  left: 50%;
+  z-index: 70;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Day context menu                                                    */
+/* ------------------------------------------------------------------ */
+
+.popup .context-menu {
+  min-width: 164px;
+}

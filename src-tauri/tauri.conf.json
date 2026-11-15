@@ -1,0 +1,61 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "PersianCalendar",
+  "version": "1.0.0",
+  "identifier": "ir.saeed.persiancalendar",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "popup",
+        "title": "تقویم شمسی",
+        "width": 344,
+        "height": 424,
+        "minWidth": 344,
+        "minHeight": 424,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "focus": true,
+        "shadow": false,
+        "windowEffects": {
+          "effects": ["mica"],
+          "state": "active"
+        }
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "تقویم شمسی مینیمال",
+    "longDescription": "تقویم شمسی مینیمال برای ویندوز: آیکون پویا در System Tray، پاپ‌آپ تقویم، مناسبت‌ها و ویجت دسکتاپ اختیاری.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

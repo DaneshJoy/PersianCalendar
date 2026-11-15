@@ -1,0 +1,338 @@
+/* ==================================================================
+   Base: local Vazirmatn, design tokens, theme, reset, shared bits.
+   Only two neutral surface colours + the accent are used.
+   ================================================================== */
+
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("../assets/fonts/Vazirmatn-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("../assets/fonts/Vazirmatn-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("../assets/fonts/Vazirmatn-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("../assets/fonts/Vazirmatn-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --font-ui: "Vazirmatn", "Segoe UI", system-ui, sans-serif;
+
+  /* surfaces (semi-transparent so Windows Mica shows through) */
+  --surface: rgba(248, 249, 252, 0.9);
+  --surface-solid: #f7f8fa;
+  --surface-raised: rgba(255, 255, 255, 0.72);
+  --surface-hover: rgba(15, 23, 42, 0.055);
+  --surface-active: rgba(15, 23, 42, 0.095);
+  --overlay: #f7f8fa;
+
+  --text: #1b1f27;
+  --text-secondary: #566070;
+  --text-muted: #8a93a1;
+
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
+
+  --holiday: #c2414f;
+  --holiday-weak: rgba(194, 65, 79, 0.1);
+
+  /* overridden per settings by applyAppearance() */
+  --accent: #2f6fed;
+  --accent-weak: rgba(47, 111, 237, 0.16);
+  --accent-soft: rgba(47, 111, 237, 0.09);
+  --accent-line: rgba(47, 111, 237, 0.32);
+  --accent-contrast: #ffffff;
+
+  --shadow-pop: 0 10px 26px rgba(15, 23, 42, 0.18);
+
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 7px;
+
+  --dur-fast: 90ms;
+  --dur: 110ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --day-size: 34px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: rgba(30, 34, 42, 0.9);
+  --surface-solid: #1e222a;
+  --surface-raised: rgba(255, 255, 255, 0.06);
+  --surface-hover: rgba(255, 255, 255, 0.07);
+  --surface-active: rgba(255, 255, 255, 0.12);
+  --overlay: #1e222a;
+
+  --text: #f2f5fa;
+  --text-secondary: #b6bfcc;
+  --text-muted: #8a95a5;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --holiday: #ef8290;
+  --holiday-weak: rgba(239, 130, 144, 0.12);
+
+  --shadow-pop: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-font="system"] {
+  --font-ui: "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+::selection {
+  background: var(--accent-weak);
+}
+
+/* thin RTL-friendly scrollbars */
+.settings__body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.settings__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings__body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.settings__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared icon button                                                  */
+/* ------------------------------------------------------------------ */
+
+.icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.icon-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.icon-button:active {
+  background: var(--surface-active);
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared context / quick menu                                         */
+/* ------------------------------------------------------------------ */
+
+.context-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 168px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px) scale(0.98);
+  transform-origin: top right;
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease),
+    visibility var(--dur-fast) var(--ease);
+}
+
+.context-menu.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.menu-item:hover {
+  background: var(--surface-hover);
+}
+
+.menu-item:active {
+  background: var(--surface-active);
+}
+
+.menu-item .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+}
+
+.menu-item.is-active {
+  color: var(--accent);
+}
+
+.menu-item--muted {
+  color: var(--text-muted);
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Fatal bootstrap fallback                                            */
+/* ------------------------------------------------------------------ */
+
+.fatal-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion                                                              */
+/* ------------------------------------------------------------------ */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

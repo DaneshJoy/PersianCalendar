@@ -1,0 +1,74 @@
+# مجوز PersianCalendar
+
+کد پروژه‌ی PersianCalendar تحت مجوز **MIT** منتشر می‌شود. متن رسمی و الزام‌آور مجوز به
+زبان انگلیسی در ادامه آمده است؛ بخش «مجوزهای شخص ثالث» فونت، کتابخانه‌ها و منبع
+داده‌های مناسبت‌ها را معرفی می‌کند.
+
+---
+
+MIT License
+
+Copyright (c) 2026 PersianCalendar contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## Third-Party Notices / مجوزهای شخص ثالث
+
+### Vazirmatn (فونت)
+
+Copyright 2015 The Vazirmatn Project Authors
+(https://github.com/rastikerdar/vazirmatn)
+
+فایل‌های فونت Vazirmatn که به‌صورت محلی در برنامه استفاده شده‌اند (در
+`src/assets/fonts/` و `src-tauri/assets/`) تحت مجوز **SIL Open Font License,
+Version 1.1** منتشر می‌شوند. متن کامل مجوز در فایل
+`src/assets/fonts/OFL.txt` موجود است.
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+The full license text is included in `src/assets/fonts/OFL.txt`.
+
+### jalaali-js (کتابخانه‌ی تبدیل تاریخ)
+
+Copyright (c) 2020 Behrang Norouzinia
+(https://github.com/jalaali/jalaali-js)
+
+کتابخانه‌ی `jalaali-js` تحت مجوز **MIT** استفاده می‌شود. متن مجوز در بسته‌ی
+npm این کتابخانه (`node_modules/jalaali-js/LICENSE`) قرار دارد.
+
+Licensed under the MIT License.
+
+### Tauri و سایر وابستگی‌ها
+
+برنامه با Tauri v2 ساخته شده و از کتابخانه‌های Rust و npm متعددی استفاده می‌کند
+(از جمله `reqwest`، `ab_glyph`، `chrono`، `serde` و پلاگین‌های رسمی Tauri).
+هر وابستگی تحت مجوز خودش (به‌طور معمول MIT یا Apache-2.0) منتشر می‌شود و حقوق
+مربوط به صاحبان آن‌ها محفوظ است. فهرست کامل وابستگی‌ها و مجوزهایشان را می‌توانید
+با `cargo metadata` و `npm ls` مشاهده کنید.
+
+### داده‌های مناسبت‌ها (pnldev.com API)
+
+داده‌های مناسبت‌ها، تعطیلات رسمی و تاریخ قمری از سرویس
+`https://pnldev.com/api/calender` دریافت می‌شوند. این داده‌ها بخشی از این پروژه
+نیستند و مجوز MIT بالا شامل آن‌ها نمی‌شود؛ حقوق داده‌ها متعلق به سرویس‌دهنده است.
+برنامه هیچ داده‌ای جز `year` و `month` به این سرویس ارسال نمی‌کند.
+
+Event data is fetched from the pnldev.com calendar API and is not covered by
+this project's MIT license.
