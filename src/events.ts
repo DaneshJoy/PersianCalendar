@@ -32,7 +32,7 @@ export class EventsStore {
   /** Returns cached data instantly, otherwise asks Rust (which may hit its disk cache). */
   async load(year: number, month: number): Promise<MonthEvents | null> {
     const cached = this.cache.get(monthKey(year, month));
-    if (cached) return cached;
+    if (cached && cached.source !== "builtin") return cached;
     return this.fetch(year, month, false);
   }
 
@@ -42,7 +42,9 @@ export class EventsStore {
   }
 
   invalidate(year: number, month: number): void {
-    this.cache.delete(monthKey(year, month));
+    const key = monthKey(year, month);
+    this.cache.delete(key);
+    this.inFlight.delete(key);
   }
 
   /**
@@ -65,12 +67,9 @@ export class EventsStore {
 
   /** Clears Rust's disk cache *and* this in-memory cache. */
   async clear(): Promise<void> {
-    try {
-      await this.bridge.clearEventsCache();
-    } catch (error) {
-      console.error("clear_events_cache failed", error);
-    }
+    await this.bridge.clearEventsCache();
     this.cache.clear();
+    this.inFlight.clear();
   }
 
   private fetch(year: number, month: number, force: boolean): Promise<MonthEvents | null> {
@@ -78,20 +77,20 @@ export class EventsStore {
     const pending = this.inFlight.get(key);
     if (pending) return pending;
 
-    const request = (async (): Promise<MonthEvents | null> => {
+    const request = Promise.resolve().then(async (): Promise<MonthEvents | null> => {
       try {
         const data = force
           ? await this.bridge.refreshMonthEvents(year, month)
           : await this.bridge.getMonthEvents(year, month);
-        if (data.source !== "none") this.cache.set(key, data);
+        if (this.inFlight.get(key) === request && data.source !== "none") this.cache.set(key, data);
         return data;
       } catch (error) {
         console.error(`month events ${key} failed`, error);
         return null;
       } finally {
-        this.inFlight.delete(key);
+        if (this.inFlight.get(key) === request) this.inFlight.delete(key);
       }
-    })();
+    });
 
     this.inFlight.set(key, request);
     return request;

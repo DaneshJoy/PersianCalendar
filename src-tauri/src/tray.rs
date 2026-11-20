@@ -1,14 +1,6 @@
-//! System tray icon, tooltip and context menu.
-//!
-//! The tray icon is a live rendering of today's Jalali day number (see
-//! [`crate::icon`]); the tooltip and menu carry the full date, today's
-//! occasion/holiday, the copy shortcuts and the quick toggles. Everything is
-//! rebuilt from [`crate::settings::Settings`] by [`refresh`], so the icon, the
-//! tooltip and the menu checkbox/label states never drift out of sync.
-//!
-//! Left click toggles the calendar popup; the context menu is shown on right
-//! click only (`.show_menu_on_left_click(false)`).
+//! Shared notification menu and refresh dispatch for the taskbar surfaces.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::{
@@ -17,91 +9,149 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Rect,
 };
-use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::settings::{self, CopyFormat, Settings};
-use crate::{icon, theme, today, windows, AppState};
-
-/// Id of our single tray icon.
-pub const TRAY_ID: &str = "main";
-
-/// Longest tooltip Windows displays reliably.
-const TOOLTIP_MAX_CHARS: usize = 120;
+use crate::{capsule, clock, icon, theme, today, windows, AppState};
 
 /// Latest tray-icon rect (physical pixels), used to place the popup when it is
 /// opened from the menu (where no tray event is available).
 static LAST_TRAY_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
-// ---------------------------------------------------------------------------
-// Creation / refresh
-// ---------------------------------------------------------------------------
+static DATE_ICON: NotificationIcon = NotificationIcon::new("main");
+pub static CLOCK_ICON: NotificationIcon = NotificationIcon::new("world-clock");
 
-/// Create the tray icon together with its tooltip and menu.
-///
-/// Call from the Tauri setup hook (main thread). The menu items are *not*
-/// routed here: `main.rs` registers a single global menu-event listener that
-/// calls [`handle_menu_event`], so app-level and tray menus share one path.
-pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app)?;
-    let tooltip = build_tooltip(app);
-    let icon_image = render_tray_icon(app);
-
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon_image)
-        .tooltip(tooltip)
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| {
-            let app = tray.app_handle();
-            if let Some(rect) = event_rect(&event) {
-                remember_tray_rect(rect);
-            }
-            // `MouseButtonState::Up` is emitted for WM_LBUTTONUP, i.e. on release.
-            if let TrayIconEvent::Click {
-                rect,
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                windows::toggle_popup(app, Some(rect));
-            }
-        })
-        .build(app)?;
-
-    Ok(())
+pub struct NotificationIcon {
+    id: &'static str,
+    visible: AtomicBool,
 }
 
-/// Rebuild the tray icon, tooltip and menu from the current settings.
-///
-/// Safe to call from any thread: the update is marshalled onto the main thread.
+impl NotificationIcon {
+    const fn new(id: &'static str) -> Self {
+        Self {
+            id,
+            visible: AtomicBool::new(false),
+        }
+    }
+
+    /// Update the icon on the UI thread, reusing its Shell registration.
+    pub fn update(
+        &self,
+        app: &AppHandle,
+        content: Option<(Image<'static>, String)>,
+    ) -> tauri::Result<()> {
+        let existing = app.tray_by_id(self.id);
+        let Some((image, tooltip)) = content else {
+            if let Some(icon) = existing.filter(|_| self.visible.load(Ordering::Relaxed)) {
+                icon.set_visible(false)?;
+                self.visible.store(false, Ordering::Relaxed);
+            }
+            return Ok(());
+        };
+        let tooltip = truncate_chars(&tooltip, 120);
+        if let Some(icon) = existing {
+            icon.set_icon(Some(image))?;
+            icon.set_tooltip(Some(tooltip))?;
+            if !self.visible.load(Ordering::Relaxed) {
+                icon.set_visible(true)?;
+            }
+        } else {
+            TrayIconBuilder::with_id(self.id)
+                .icon(image)
+                .tooltip(tooltip)
+                .menu(&build_menu(app)?)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray_icon, event| {
+                    follow_tray_event(&event);
+                    if let TrayIconEvent::Click {
+                        rect,
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        windows::toggle_popup(tray_icon.app_handle(), Some(rect));
+                    }
+                })
+                .build(app)?;
+        }
+        self.visible.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+pub fn any_notification_icon_visible() -> bool {
+    DATE_ICON.visible.load(Ordering::Relaxed) || CLOCK_ICON.visible.load(Ordering::Relaxed)
+}
+
+fn show_date_icon(settings: &Settings, fallback_allowed: bool) -> bool {
+    !settings.capsule_enabled || fallback_allowed
+}
+
+/// Render today's local Solar Hijri day and provide the full date in the tooltip.
+pub fn refresh_date(app: &AppHandle) -> tauri::Result<()> {
+    let settings = current_settings(app);
+    let content = show_date_icon(&settings, capsule::fallback_allowed()).then(|| {
+        let day = today::today_jalaali().day;
+        let color = icon::text_color(
+            settings.calendar_day_color.as_deref(),
+            theme::tray_icon_is_light(),
+        );
+        (
+            icon::render_day(day, settings.fa_digits(), color, tray_icon_px(app)),
+            today::tooltip_text(app),
+        )
+    });
+    DATE_ICON.update(app, content)
+}
+
+pub fn schedule_date_refresh(app: &AppHandle) {
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || refresh_date_inner(&handle)) {
+        eprintln!("[tray] cannot schedule date refresh: {err}");
+    }
+}
+
+fn refresh_date_inner(app: &AppHandle) {
+    if let Err(err) = refresh_date(app) {
+        eprintln!("[tray] cannot update date icon: {err}");
+    }
+}
+
+/// Refresh the visible surfaces and rebuild the notification menu after a settings change.
 pub fn refresh(app: &AppHandle) {
     let handle = app.clone();
-    if let Err(err) = app.run_on_main_thread(move || refresh_inner(&handle)) {
+    if let Err(err) = app.run_on_main_thread(move || {
+        refresh_date_inner(&handle);
+        refresh_clock_inner(&handle);
+        for icon in [&DATE_ICON, &CLOCK_ICON] {
+            if let Some(icon) = handle.tray_by_id(icon.id) {
+                if let Err(err) = build_menu(&handle).and_then(|menu| icon.set_menu(Some(menu))) {
+                    eprintln!("[tray] cannot update the menu: {err}");
+                }
+            }
+        }
+    }) {
         eprintln!("[tray] cannot schedule refresh: {err}");
     }
 }
 
-fn refresh_inner(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else {
-        eprintln!("[tray] refresh requested before the tray icon was created");
-        return;
-    };
+pub fn refresh_clock(app: &AppHandle) {
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || refresh_clock_inner(&handle)) {
+        eprintln!("[clock] cannot schedule refresh: {err}");
+    }
+}
 
-    if let Err(err) = tray.set_icon(Some(render_tray_icon(app))) {
-        eprintln!("[tray] cannot update icon: {err}");
+fn refresh_clock_inner(app: &AppHandle) {
+    if let Err(err) = clock::refresh(app) {
+        eprintln!("[clock] cannot update tray icon: {err}");
     }
-    if let Err(err) = tray.set_tooltip(Some(build_tooltip(app))) {
-        eprintln!("[tray] cannot update tooltip: {err}");
-    }
-    match build_menu(app) {
-        Ok(menu) => {
-            if let Err(err) = tray.set_menu(Some(menu)) {
-                eprintln!("[tray] cannot update menu: {err}");
-            }
-        }
-        Err(err) => eprintln!("[tray] cannot rebuild menu: {err}"),
+}
+
+fn follow_tray_event(event: &TrayIconEvent) {
+    if let Some(rect) = event_rect(event) {
+        remember_tray_rect(rect);
     }
 }
 
@@ -131,20 +181,8 @@ fn event_rect(event: &TrayIconEvent) -> Option<Rect> {
 // Icon, tooltip and menu content
 // ---------------------------------------------------------------------------
 
-fn render_tray_icon(app: &AppHandle) -> Image<'static> {
-    let settings = current_settings(app);
-    let today_jalali = today::today_jalaali();
-    icon::render(
-        today_jalali.day,
-        settings.fa_digits(),
-        settings.tray_icon_mode,
-        theme::tray_icon_is_light(),
-        tray_icon_px(app),
-    )
-}
-
 /// Physical icon size: 32px at 100% scaling, up to 64px on high-DPI screens.
-fn tray_icon_px(app: &AppHandle) -> u32 {
+pub fn tray_icon_px(app: &AppHandle) -> u32 {
     let scale = app
         .primary_monitor()
         .ok()
@@ -154,23 +192,29 @@ fn tray_icon_px(app: &AppHandle) -> u32 {
     ((32.0 * scale).round() as u32).clamp(32, 64)
 }
 
-fn build_tooltip(app: &AppHandle) -> String {
-    truncate_chars(&today::tooltip_text(app), TOOLTIP_MAX_CHARS)
-}
-
-fn truncate_chars(text: &str, max_chars: usize) -> String {
+pub fn truncate_chars(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
     }
-    if text.chars().count() <= max_chars {
+    if text.encode_utf16().count() <= max_chars {
         return text.to_string();
     }
-    let mut truncated: String = text.chars().take(max_chars - 1).collect();
+    let mut remaining = max_chars - 1;
+    let mut truncated: String = text
+        .chars()
+        .take_while(|ch| {
+            if ch.len_utf16() > remaining {
+                return false;
+            }
+            remaining -= ch.len_utf16();
+            true
+        })
+        .collect();
     truncated.push('…');
     truncated
 }
 
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let settings = current_settings(app);
     let (slash, long, iso) = today::copy_variants(app);
 
@@ -245,55 +289,37 @@ fn copy_today(app: &AppHandle, format: CopyFormat, what: &str) {
 }
 
 fn toggle_widget(app: &AppHandle) {
-    let Some(settings) = mutate_settings(app, |settings| {
-        settings.widget_enabled = !settings.widget_enabled;
-    }) else {
-        return;
-    };
-    if let Err(err) = settings::persist(app, &settings) {
-        eprintln!("[tray] cannot persist widget setting: {err}");
+    match settings::update(app, |current| {
+        let mut next = current.clone();
+        next.widget_enabled = !next.widget_enabled;
+        Ok(next)
+    }) {
+        Ok(settings) => {
+            windows::apply_widget(app);
+            let _ = app.emit("settings-changed", &settings);
+            refresh(app);
+        }
+        Err(err) => {
+            eprintln!("[tray] cannot persist widget setting: {err}");
+            refresh(app);
+        }
     }
-    windows::apply_widget(app);
-    // The check item flips itself when clicked (muda toggles check items), so
-    // the menu is deliberately not rebuilt from inside its own event handler.
-    emit_settings_changed(app, &settings);
 }
 
 fn toggle_autostart(app: &AppHandle) {
-    let current = current_settings(app).autostart;
-    match set_autostart(app, !current) {
-        Ok(_) => emit_settings_changed(app, &current_settings(app)),
-        Err(err) => eprintln!("[tray] cannot toggle autostart: {err}"),
-    }
-}
-
-/// Enable/disable launch-at-login, then mirror the real state in the settings.
-pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
-    let actual = {
-        let manager = app.autolaunch();
-        let operation = if enabled {
-            manager.enable()
-        } else {
-            manager.disable()
-        };
-        operation.map_err(|err| format!("cannot change autostart: {err}"))?;
-        manager
-            .is_enabled()
-            .map_err(|err| format!("cannot read autostart state: {err}"))?
-    };
-
-    let Some(settings) = mutate_settings(app, |settings| settings.autostart = actual) else {
-        return Err("settings state is unavailable".to_string());
-    };
-    if let Err(err) = settings::persist(app, &settings) {
-        return Err(format!("cannot persist autostart setting: {err}"));
-    }
-    Ok(actual)
-}
-
-fn emit_settings_changed(app: &AppHandle, settings: &Settings) {
-    if let Err(err) = app.emit("settings-changed", settings) {
-        eprintln!("[tray] cannot emit settings-changed: {err}");
+    match settings::update(app, |current| {
+        let mut next = current.clone();
+        next.autostart = !next.autostart;
+        Ok(next)
+    }) {
+        Ok(settings) => {
+            let _ = app.emit("settings-changed", &settings);
+            refresh(app);
+        }
+        Err(err) => {
+            eprintln!("[tray] cannot toggle autostart: {err}");
+            refresh(app);
+        }
     }
 }
 
@@ -310,24 +336,21 @@ fn current_settings(app: &AppHandle) -> Settings {
     settings
 }
 
-/// Whether Windows will start the app with the user's session.
-pub fn get_autostart(app: &AppHandle) -> bool {
-    app.autolaunch().is_enabled().unwrap_or(false)
-}
-
-fn mutate_settings<F: FnOnce(&mut Settings)>(app: &AppHandle, mutate: F) -> Option<Settings> {
-    let state = app.state::<AppState>();
-    let mut guard = match state.settings.write() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    mutate(&mut guard);
-    Some(guard.clone())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn date_icon_is_default_and_yields_to_the_capsule_when_available() {
+        let mut settings = Settings::default();
+        assert!(show_date_icon(&settings, false));
+        settings.clock_enabled = true;
+        settings.clock_layout = settings::ClockLayout::Stacked;
+        assert!(show_date_icon(&settings, false));
+        settings.capsule_enabled = true;
+        assert!(!show_date_icon(&settings, false));
+        assert!(show_date_icon(&settings, true));
+    }
 
     #[test]
     fn short_tooltip_is_kept_as_is() {

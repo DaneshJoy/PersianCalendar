@@ -1,10 +1,10 @@
-//! Events/holidays data source with an on-disk cache.
+//! Events/holidays data source with a local calendar and a downloaded cache.
 //!
 //! The calendar core is fully local; the pnldev API is only used for holidays,
 //! occasions (`event`) and the lunar date (`moon`). Rules implemented here:
 //!
 //! * month-level requests only (`?year=Y&month=M`), never per-day;
-//! * 5 second timeout and a dedicated User-Agent;
+//! * bounded request timeout and a dedicated User-Agent;
 //! * disk cache in `app_cache_dir()/events/<year>-<month>.json`;
 //! * past months are cached forever, current/future months expire after 7 days;
 //! * stale-while-revalidate: show the cached value immediately, refresh in the
@@ -14,9 +14,10 @@
 //!
 //! The HTTP source is behind the [`EventsProvider`] trait so it can be swapped.
 
-use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,14 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::jalaali;
 
 pub const BASE_URL: &str = "https://pnldev.com/api/calender";
-pub const USER_AGENT: &str = "PersianCalendar/1.0 (+https://github.com/DaneshJoy/PersianCalendar; Windows)";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+pub const USER_AGENT: &str =
+    "PersianCalendar/1.0 (+https://github.com/DaneshJoy/PersianCalendar; Windows)";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_RESIDENT_MONTHS: usize = 12;
+const MAX_MONTH_BYTES: usize = 256 * 1024;
+const MAX_CACHE_BYTES: usize = 2 * MAX_MONTH_BYTES;
+const MAX_EVENTS_PER_DAY: usize = 64;
+const MAX_EVENT_CHARS: usize = 512;
 const CACHE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const DAILY_REFRESH_SECONDS: i64 = 24 * 60 * 60;
 const BACKOFF_MIN: Duration = Duration::from_secs(5 * 60);
@@ -101,7 +108,7 @@ pub struct MonthData {
 pub enum DataSource {
     Cache,
     Network,
-    None,
+    Builtin,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,13 +123,15 @@ pub struct MonthEvents {
 }
 
 impl MonthEvents {
-    fn empty(year: i32, month: u32, error: Option<String>) -> Self {
+    fn from_builtin(year: i32, month: u32, error: Option<String>) -> Self {
         Self {
             year,
             month,
-            source: DataSource::None,
+            source: DataSource::Builtin,
             stale: false,
-            days: BTreeMap::new(),
+            days: (1..=jalaali::jalaali_month_length(year, month))
+                .map(|day| (day, builtin_day(year, month, day)))
+                .collect(),
             error,
         }
     }
@@ -148,6 +157,47 @@ impl MonthEvents {
             error: None,
         }
     }
+}
+
+#[derive(Deserialize)]
+struct RecurringOccasions {
+    solar: BTreeMap<String, Vec<(String, bool)>>,
+    gregorian: BTreeMap<String, Vec<(String, bool)>>,
+}
+
+fn builtin_day(year: i32, month: u32, day: u32) -> DayInfo {
+    static OCCASIONS: OnceLock<RecurringOccasions> = OnceLock::new();
+    let occasions = OCCASIONS.get_or_init(|| {
+        serde_json::from_str(include_str!("../assets/recurring-occasions.json"))
+            .expect("the bundled calendar catalogue is valid")
+    });
+    let gregorian = jalaali::to_gregorian(year, month, day);
+    let mut result = DayInfo {
+        gregorian: Some(CivilDate {
+            year: gregorian.year,
+            month: gregorian.month,
+            day: gregorian.day,
+        }),
+        ..Default::default()
+    };
+    let solar_key = format!("{month:02}-{day:02}");
+    let civil_key = format!("{:02}-{:02}", gregorian.month, gregorian.day);
+    for (text, holiday) in occasions
+        .solar
+        .get(&solar_key)
+        .into_iter()
+        .flatten()
+        .chain(occasions.gregorian.get(&civil_key).into_iter().flatten())
+    {
+        result.holiday |= holiday;
+        if !result.events.iter().any(|event| &event.text == text) {
+            result.events.push(Occasion {
+                text: text.clone(),
+                lunar: None,
+            });
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +267,10 @@ pub fn clean_event(raw: &str) -> String {
                 }
             }
             _ => {
-                if depth == 0 {
+                if depth == 0
+                    && !ch.is_control()
+                    && !matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                {
                     cleaned.push(ch);
                 }
             }
@@ -384,7 +437,7 @@ fn parse_month(
         let Ok(day_number) = key.parse::<u32>() else {
             continue;
         };
-        if !(1..=31).contains(&day_number) {
+        if !(1..=jalaali::jalaali_month_length(year, month)).contains(&day_number) {
             continue;
         }
         // Annual payloads nest months under the top level; skip those neatly.
@@ -394,9 +447,17 @@ fn parse_month(
         let Ok(api_day) = serde_json::from_value::<ApiDay>(value.clone()) else {
             continue;
         };
+        if !api_day
+            .solar
+            .is_some_and(|solar| (solar.year, solar.month, solar.day) == (year, month, day_number))
+        {
+            continue;
+        }
         let events: Vec<Occasion> = api_day
             .event
             .iter()
+            .take(MAX_EVENTS_PER_DAY)
+            .filter(|event| event.chars().take(MAX_EVENT_CHARS + 1).count() <= MAX_EVENT_CHARS)
             .map(|event| parse_occasion(event))
             .filter(|occasion| !occasion.text.is_empty())
             .collect();
@@ -453,25 +514,13 @@ pub fn parse_response(
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 /// Plugging point for the events source. A different endpoint can be added by
-/// implementing this trait and passing it to [`EventsState::with_provider`].
+/// implementing this trait.
 pub trait EventsProvider: Send + Sync {
     fn fetch_month<'a>(&'a self, year: i32, month: u32)
         -> BoxFuture<'a, Result<MonthData, String>>;
 }
 
-pub struct PnldevProvider {
-    client: reqwest::Client,
-    base_url: &'static str,
-}
-
-impl PnldevProvider {
-    pub fn new(client: reqwest::Client) -> Self {
-        Self {
-            client,
-            base_url: BASE_URL,
-        }
-    }
-}
+pub struct PnldevProvider;
 
 impl EventsProvider for PnldevProvider {
     fn fetch_month<'a>(
@@ -481,32 +530,45 @@ impl EventsProvider for PnldevProvider {
     ) -> BoxFuture<'a, Result<MonthData, String>> {
         Box::pin(async move {
             // Only `year` and `month` are ever sent; no user data, no identifiers.
-            let url = format!("{}?year={}&month={}", self.base_url, year, month);
-            let response = self
-                .client
-                .get(url)
+            // Read the current Windows proxy configuration on each monthly request.
+            let client = build_http_client().ok_or("HTTP client unavailable")?;
+            let mut response = client
+                .get(BASE_URL)
+                .query(&[("year", year), ("month", month as i32)])
                 .send()
                 .await
                 .map_err(|err| format!("network error: {err}"))?;
             if !response.status().is_success() {
                 return Err(format!("HTTP {}", response.status()));
             }
-            let body = response
-                .text()
+            let mut body = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
                 .await
-                .map_err(|err| format!("failed to read response: {err}"))?;
-            parse_response(year, month, &body, chrono::Utc::now().timestamp())
+                .map_err(|err| format!("failed to read response: {err}"))?
+            {
+                if chunk.len() > MAX_MONTH_BYTES - body.len() {
+                    return Err("monthly response exceeds the maximum size".to_string());
+                }
+                body.extend_from_slice(&chunk);
+            }
+            let body = std::str::from_utf8(&body).map_err(|err| format!("invalid UTF-8: {err}"))?;
+            parse_response(year, month, body, chrono::Utc::now().timestamp())
         })
     }
 }
 
-fn build_http_client() -> reqwest::Client {
+fn build_http_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(6))
         .timeout(REQUEST_TIMEOUT)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(USER_AGENT)
         .gzip(true)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .map_err(|err| eprintln!("[events] cannot build HTTP client: {err}"))
+        .ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -539,31 +601,26 @@ impl Default for BackoffState {
 }
 
 pub struct EventsState {
-    client: reqwest::Client,
     cache_dir: PathBuf,
+    cache_generation: Mutex<u64>,
     provider: Arc<dyn EventsProvider>,
     backoff: Mutex<BackoffState>,
     in_flight: Mutex<HashSet<(i32, u32)>>,
-    prefetch_gate: tokio::sync::Mutex<()>,
+    fetch_gate: tokio::sync::Mutex<()>,
+    resident: Mutex<VecDeque<MonthData>>,
 }
 
 impl EventsState {
     pub fn new(cache_dir: PathBuf) -> Self {
-        let client = build_http_client();
-        let provider: Arc<dyn EventsProvider> = Arc::new(PnldevProvider::new(client.clone()));
         Self {
-            client,
             cache_dir,
-            provider,
+            cache_generation: Mutex::new(0),
+            provider: Arc::new(PnldevProvider),
             backoff: Mutex::new(BackoffState::default()),
             in_flight: Mutex::new(HashSet::new()),
-            prefetch_gate: tokio::sync::Mutex::new(()),
+            fetch_gate: tokio::sync::Mutex::new(()),
+            resident: Mutex::new(VecDeque::new()),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn http_client(&self) -> &reqwest::Client {
-        &self.client
     }
 
     fn events_dir(&self) -> PathBuf {
@@ -575,8 +632,15 @@ impl EventsState {
     }
 
     fn read_cache(&self, year: i32, month: u32) -> Option<MonthData> {
-        let path = self.cache_path(year, month);
-        let bytes = std::fs::read(path).ok()?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(self.cache_path(year, month))
+            .ok()?
+            .take(MAX_CACHE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > MAX_CACHE_BYTES {
+            return None;
+        }
         match serde_json::from_slice::<CacheFile>(&bytes) {
             // Legacy caches stored events as plain strings, so the schema
             // version must match before the data is trusted.
@@ -587,6 +651,7 @@ impl EventsState {
                 );
                 None
             }
+            Ok(file) if (file.year, file.month) != (year, month) => None,
             Ok(file) => Some(MonthData {
                 year: file.year,
                 month: file.month,
@@ -642,7 +707,7 @@ impl EventsState {
         now.saturating_sub(fetched_at) > CACHE_TTL_SECONDS
     }
 
-    fn backoff_allows(&self) -> bool {
+    pub fn backoff_allows(&self) -> bool {
         let state = self.backoff.lock().unwrap();
         match state.next_allowed {
             Some(next) => Instant::now() >= next,
@@ -653,7 +718,7 @@ impl EventsState {
     fn record_failure(&self) {
         let mut state = self.backoff.lock().unwrap();
         state.failures = state.failures.saturating_add(1);
-        let factor = 1u32 << (state.failures.min(3) - 1);
+        let factor = 1u32 << (state.failures.min(4) - 1);
         let delay = (BACKOFF_MIN * factor).min(BACKOFF_MAX);
         state.next_allowed = Some(Instant::now() + delay);
     }
@@ -664,25 +729,39 @@ impl EventsState {
         state.next_allowed = None;
     }
 
-    /// Return cached month data without touching the network.
+    /// Prefer the running session's downloaded data even if the disk is unavailable.
     pub fn cached_month(&self, year: i32, month: u32) -> Option<MonthData> {
-        self.read_cache(year, month)
+        let resident = self
+            .resident
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|data| (data.year, data.month) == (year, month))
+            .cloned();
+        resident.or_else(|| self.read_cache(year, month))
     }
 
-    /// Cached info for one day, if available.
+    /// The bundled calendar contains fixed solar and Gregorian occasions only.
     pub fn cached_day(&self, year: i32, month: u32, day: u32) -> Option<DayInfo> {
-        self.read_cache(year, month)
-            .and_then(|data| data.days.get(&day).cloned())
+        if !(1..=jalaali::jalaali_month_length(year, month)).contains(&day) {
+            return None;
+        }
+        Some(
+            self.cached_month(year, month)
+                .and_then(|mut data| data.days.remove(&day))
+                .unwrap_or_else(|| builtin_day(year, month, day)),
+        )
     }
 
-    /// True when the current month cache is older than a day (daily refresh).
-    pub fn needs_daily_refresh(&self, year: i32, month: u32) -> bool {
-        match self.read_cache(year, month) {
-            Some(data) => {
-                let now = chrono::Utc::now().timestamp();
-                now.saturating_sub(data.fetched_at) > DAILY_REFRESH_SECONDS
-            }
-            None => true,
+    pub fn schedule_daily_refresh(&self, app: &AppHandle, year: i32, month: u32) {
+        if !online_allowed(app) || !self.backoff_allows() {
+            return;
+        }
+        let cached_at = self.cached_month(year, month).map(|data| data.fetched_at);
+        if cached_at.map_or(true, |timestamp| {
+            chrono::Utc::now().timestamp().saturating_sub(timestamp) >= DAILY_REFRESH_SECONDS
+        }) {
+            self.spawn_refresh(app.clone(), year, month, cached_at);
         }
     }
 
@@ -697,7 +776,7 @@ impl EventsState {
         month: u32,
         force_refresh: bool,
     ) -> MonthEvents {
-        let cached = self.read_cache(year, month);
+        let cached = self.cached_month(year, month);
 
         let stale = match &cached {
             Some(data) => self.is_expired(year, month, data.fetched_at),
@@ -716,18 +795,21 @@ impl EventsState {
         if let Some(data) = &cached {
             let clone = data.clone();
             let state_needs_refresh = force_refresh || stale;
-            if state_needs_refresh && self.backoff_allows() {
-                self.spawn_refresh(app.clone(), year, month);
+            if state_needs_refresh && online_allowed(app) && self.backoff_allows() {
+                self.spawn_refresh(app.clone(), year, month, Some(data.fetched_at));
             }
             return MonthEvents::from_cache(year, month, clone, stale);
         }
 
-        if !self.backoff_allows() {
-            return MonthEvents::empty(
-                year,
-                month,
-                Some("در انتظار تلاش مجدد؛ اتصال شبکه را بررسی کنید".to_string()),
-            );
+        if !online_allowed(app) || !self.backoff_allows() {
+            return MonthEvents::from_builtin(year, month, None);
+        }
+        let _gate = self.fetch_gate.lock().await;
+        if let Some(data) = self.cached_month(year, month) {
+            return MonthEvents::from_cache(year, month, data, false);
+        }
+        if !online_allowed(app) || !self.backoff_allows() {
+            return MonthEvents::from_builtin(year, month, None);
         }
 
         match self.fetch_and_store(year, month).await {
@@ -740,18 +822,32 @@ impl EventsState {
             Err(err) => {
                 self.record_failure();
                 eprintln!("[events] fetch {year}-{month} failed: {err}");
-                MonthEvents::empty(year, month, Some(err))
+                MonthEvents::from_builtin(year, month, Some(err))
             }
         }
     }
 
     async fn fetch_and_store(&self, year: i32, month: u32) -> Result<MonthData, String> {
+        let generation = *self.cache_generation.lock().unwrap();
         let data = self.provider.fetch_month(year, month).await?;
-        self.write_cache(&data);
+        self.store_download(generation, &data);
         Ok(data)
     }
 
-    fn spawn_refresh(&self, app: AppHandle, year: i32, month: u32) {
+    fn store_download(&self, generation: u64, data: &MonthData) {
+        let current = self.cache_generation.lock().unwrap();
+        if *current != generation {
+            return;
+        }
+        let mut resident = self.resident.lock().unwrap();
+        resident.retain(|old| (old.year, old.month) != (data.year, data.month));
+        resident.push_front(data.clone());
+        resident.truncate(MAX_RESIDENT_MONTHS);
+        drop(resident);
+        self.write_cache(data);
+    }
+
+    fn spawn_refresh(&self, app: AppHandle, year: i32, month: u32, cached_at: Option<i64>) {
         {
             let mut in_flight = self.in_flight.lock().unwrap();
             if !in_flight.insert((year, month)) {
@@ -762,7 +858,11 @@ impl EventsState {
         let events = state.events.clone();
         drop(state);
         tauri::async_runtime::spawn(async move {
-            if events.backoff_allows() {
+            let _gate = events.fetch_gate.lock().await;
+            if online_allowed(&app)
+                && events.backoff_allows()
+                && events.cached_month(year, month).map(|data| data.fetched_at) == cached_at
+            {
                 match events.fetch_and_store(year, month).await {
                     Ok(_) => {
                         events.record_success();
@@ -794,17 +894,19 @@ impl EventsState {
 
     /// Fetch a month into the cache if it is missing or expired (polite prefetch).
     pub async fn prefetch_if_needed(&self, app: &AppHandle, year: i32, month: u32) {
-        if let Some(cached) = self.read_cache(year, month) {
+        if let Some(cached) = self.cached_month(year, month) {
             if !self.is_expired(year, month, cached.fetched_at) {
                 return;
             }
         }
-        if !self.backoff_allows() {
+        if !online_allowed(app) || !self.backoff_allows() {
             return;
         }
-        // Concurrency 1: prefetches never compete with the user-facing request.
-        let _gate = self.prefetch_gate.lock().await;
-        if let Some(cached) = self.read_cache(year, month) {
+        let _gate = self.fetch_gate.lock().await;
+        if !online_allowed(app) || !self.backoff_allows() {
+            return;
+        }
+        if let Some(cached) = self.cached_month(year, month) {
             if !self.is_expired(year, month, cached.fetched_at) {
                 return;
             }
@@ -830,28 +932,36 @@ impl EventsState {
 
     /// Delete the whole events cache directory.
     pub fn clear_cache(&self) -> Result<(), String> {
-        let dir = self.events_dir();
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).map_err(|err| format!("cannot clear cache: {err}"))?;
+        let mut generation = self.cache_generation.lock().unwrap();
+        match std::fs::remove_dir_all(self.events_dir()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("cannot clear cache: {err}")),
         }
+        *generation = generation.wrapping_add(1);
+        self.resident.lock().unwrap().clear();
         Ok(())
     }
+}
+
+pub fn online_allowed(app: &AppHandle) -> bool {
+    let settings = crate::today::current_settings(app);
+    settings.online_events && (settings.show_events || settings.show_lunar)
 }
 
 fn neighbours(year: i32, month: u32) -> Vec<(i32, u32)> {
     let mut result = Vec::with_capacity(2);
     if month > 1 {
         result.push((year, month - 1));
+    } else if year > 1 {
+        result.push((year - 1, 12));
     }
     if month < 12 {
         result.push((year, month + 1));
+    } else if year < 3000 {
+        result.push((year + 1, 1));
     }
     result
-}
-
-/// Path of the events cache directory for diagnostics/logging.
-pub fn events_cache_dir(app_cache_dir: &Path) -> PathBuf {
-    app_cache_dir.join("events")
 }
 
 #[cfg(test)]
@@ -908,6 +1018,38 @@ mod tests {
         );
         assert_eq!(first.moon.unwrap().month, 5);
         assert!(data.days.get(&2).unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn builtin_covers_world_childrens_day_without_inventing_a_lunar_date() {
+        let date = jalaali::to_jalaali(2026, 11, 20);
+        let month = MonthEvents::from_builtin(date.year, date.month, None);
+        assert_eq!(month.source, DataSource::Builtin);
+        let day = &month.days[&date.day];
+        assert!(day
+            .events
+            .iter()
+            .any(|event| event.text == "روز جهانی کودک" && event.lunar.is_none()));
+        assert!(day.moon.is_none());
+    }
+
+    #[test]
+    fn capsule_can_read_downloaded_data_after_a_disk_cache_failure() {
+        let path = std::env::temp_dir().join(format!(
+            "persiancalendar-blocked-cache-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not a directory").unwrap();
+        let state = EventsState::new(path.clone());
+        let body = r#"{"status":true,"result":{"29":{"solar":{"year":1405,"month":8,"day":29},"event":["مناسبت تازه"]}}}"#;
+        let data = parse_response(1405, 8, body, 1234).unwrap();
+        state.store_download(0, &data);
+        assert!(state.read_cache(1405, 8).is_none());
+        assert_eq!(
+            state.cached_day(1405, 8, 29).unwrap().events[0].text,
+            "مناسبت تازه"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1028,8 +1170,10 @@ mod tests {
     fn ignores_cache_files_from_an_older_schema() {
         use std::collections::BTreeMap;
 
-        let dir =
-            std::env::temp_dir().join(format!("persiancalendar-events-cache-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "persiancalendar-events-cache-{}",
+            std::process::id()
+        ));
         let state = EventsState::new(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(state.events_dir()).unwrap();
@@ -1065,8 +1209,8 @@ mod tests {
 
     #[test]
     fn computes_neighbours() {
-        assert_eq!(neighbours(1405, 1), vec![(1405, 2)]);
+        assert_eq!(neighbours(1405, 1), vec![(1404, 12), (1405, 2)]);
         assert_eq!(neighbours(1405, 8), vec![(1405, 7), (1405, 9)]);
-        assert_eq!(neighbours(1405, 12), vec![(1405, 11)]);
+        assert_eq!(neighbours(1405, 12), vec![(1405, 11), (1406, 1)]);
     }
 }

@@ -16,7 +16,7 @@ import {
   visibleEventsForDate,
 } from "../events";
 import type { SettingsStore } from "../settings";
-import type { MonthEvents, Settings, TodayInfo } from "../types";
+import type { ClockInfo, MonthEvents, Settings, TodayInfo } from "../types";
 import {
   clamp,
   clear,
@@ -25,7 +25,7 @@ import {
   iconButton,
   isActivatableTarget,
 } from "./dom";
-import { SettingsPanel } from "./settings-panel";
+import { clockZoneLabel, SettingsPanel } from "./settings-panel";
 
 export interface PopupDeps {
   bridge: Bridge;
@@ -53,6 +53,10 @@ export class PopupView {
   private readonly deps: PopupDeps;
 
   private card!: HTMLElement;
+  private clockStrip!: HTMLElement;
+  private clockTime!: HTMLElement;
+  private clockZone!: HTMLElement;
+  private clockDate!: HTMLElement;
   private titleButton!: HTMLButtonElement;
   private prevButton!: HTMLButtonElement;
   private nextButton!: HTMLButtonElement;
@@ -68,6 +72,8 @@ export class PopupView {
   private panel!: SettingsPanel;
 
   private today: TodayInfo;
+  private clock: ClockInfo | null = null;
+  private fetchEventsOnline: boolean;
   private view: { jy: number; jm: number };
   private cursor: JDate | null = null;
   private monthData: MonthEvents | null = null;
@@ -81,6 +87,7 @@ export class PopupView {
     this.root = root;
     this.deps = deps;
     this.today = deps.today;
+    this.fetchEventsOnline = this.canFetchEvents(deps.settings.settings);
     this.view = { jy: deps.today.jalali.year, jm: deps.today.jalali.month };
   }
 
@@ -89,6 +96,7 @@ export class PopupView {
     this.bindEvents();
     this.bindBridgeEvents();
     this.render();
+    void this.refreshClock();
     this.blurAt = document.hasFocus() ? 0 : performance.now();
     void this.loadMonth({ initial: true });
   }
@@ -109,8 +117,18 @@ export class PopupView {
     this.titleButton = el("button", "popup__title");
     this.titleButton.type = "button";
     this.titleButton.title = "بازگشت به ماه جاری";
-    header.append(this.prevButton, this.titleButton, this.nextButton, this.gearButton);
+    const closeButton = iconButton("close", "بستن تقویم");
+    closeButton.addEventListener("click", () => void this.deps.bridge.hidePopup());
+    header.append(this.prevButton, this.titleButton, this.nextButton, this.gearButton, closeButton);
 
+    this.clockStrip = el("div", "popup__clock");
+    this.clockStrip.hidden = true;
+    this.clockTime = el("bdi", "popup__clock-time");
+    this.clockTime.dir = "ltr";
+    this.clockZone = el("bdi", "popup__clock-zone");
+    this.clockDate = el("bdi", "popup__clock-date");
+    this.clockDate.dir = "ltr";
+    this.clockStrip.append(this.clockTime, this.clockZone, this.clockDate);
     this.weekdayRow = el("div", "popup__weekdays");
     this.grid = el("div", "popup__grid");
     this.grid.setAttribute("role", "grid");
@@ -123,6 +141,7 @@ export class PopupView {
     this.panel = new SettingsPanel(this.overlay, {
       settings: this.deps.settings,
       onClearCache: () => this.handleClearCache(),
+      getClockZones: () => this.deps.bridge.getClockZones(),
     });
 
     this.tooltip = el("div", "tooltip");
@@ -137,6 +156,7 @@ export class PopupView {
 
     this.card.append(
       header,
+      this.clockStrip,
       this.weekdayRow,
       this.grid,
       this.footer,
@@ -182,6 +202,13 @@ export class PopupView {
         await Promise.all([
           this.deps.bridge.listen("settings-changed", (settings) => {
             this.deps.settings.replace(settings);
+            const wasEnabled = this.fetchEventsOnline;
+            this.fetchEventsOnline = this.canFetchEvents(settings);
+            if (!wasEnabled && this.fetchEventsOnline) void this.loadMonth();
+          }),
+          this.deps.bridge.listen("clock-changed", (clock) => {
+            this.clock = clock;
+            this.renderClock();
           }),
           this.deps.bridge.listen("theme-changed", (themeInfo) => {
             this.deps.settings.setThemeInfo(themeInfo);
@@ -195,7 +222,8 @@ export class PopupView {
       } catch (error) {
         console.error("failed to subscribe to backend events", error);
       }
-    })();
+      await this.deps.bridge.popupReady();
+    })().catch((error) => console.error("popup readiness could not be reported", error));
   }
 
   /* ---------------------------------------------------------------- */
@@ -206,9 +234,38 @@ export class PopupView {
     const settings = this.deps.settings.settings;
     this.card.classList.toggle("has-week-numbers", settings.showWeekNumber);
     this.titleButton.textContent = cal.monthTitle(this.view.jy, this.view.jm, settings.digits);
+    this.renderClock();
     this.renderWeekdays(settings);
     this.renderGrid(settings);
     this.renderFooter(settings);
+  }
+
+  private renderClock(): void {
+    const settings = this.deps.settings.settings;
+    const clock = this.clock;
+    this.clockStrip.hidden = !settings.clockEnabled || !clock;
+    if (!clock || !settings.clockEnabled) return;
+
+    const zone = clockZoneLabel(settings.clockZone);
+    if (this.clockTime.textContent !== clock.time) this.clockTime.textContent = clock.time;
+    if (this.clockDate.textContent !== clock.date) this.clockDate.textContent = clock.date;
+    if (this.clockZone.textContent !== zone) {
+      this.clockZone.textContent = zone;
+      this.clockStrip.title = zone;
+    }
+  }
+
+  private async refreshClock(): Promise<void> {
+    try {
+      this.clock = await this.deps.bridge.getClock();
+      this.renderClock();
+    } catch (error) {
+      console.error("clock unavailable", error);
+    }
+  }
+
+  private canFetchEvents(settings: Readonly<Settings>): boolean {
+    return settings.onlineEvents && (settings.showEvents || settings.showLunar);
   }
 
   private renderWeekdays(settings: Readonly<Settings>): void {
@@ -281,7 +338,9 @@ export class PopupView {
 
     if (settings.showEvents) {
       if (monthEventsMissing(this.monthData)) {
-        message = "برای نمایش مناسبت‌ها به اینترنت متصل شوید";
+        message = settings.onlineEvents
+          ? "مناسبت‌ها در دسترس نیستند"
+          : "دریافت آنلاین مناسبت‌ها در تنظیمات خاموش است";
         offline = true;
       } else if (this.cursor) {
         const events = visibleEventsForDate(this.deps.events.lookup, this.cursor, settings);
@@ -289,6 +348,10 @@ export class PopupView {
       }
     }
 
+    if (settings.showEvents && !message && this.monthData?.source === "builtin") {
+      message = "مناسبت‌های ثابت از دادهٔ آفلاین نمایش داده می‌شوند";
+      offline = true;
+    }
     this.footer.classList.toggle("popup__footer--offline", offline);
     this.footerText.textContent = message ?? "";
     this.footer.setAttribute("aria-hidden", message === null ? "true" : "false");
@@ -611,7 +674,7 @@ export class PopupView {
   };
 
   private async refreshEventsOnReconnect(): Promise<void> {
-    if (!this.deps.settings.settings.showEvents) return;
+    if (!this.canFetchEvents(this.deps.settings.settings)) return;
     const { jy, jm } = this.view;
     const data = await this.deps.events.refresh(jy, jm);
     if (!data) return;
@@ -749,5 +812,6 @@ export class PopupView {
     // Re-opened from the tray: go back to today and refresh stale data.
     this.resetToToday(true);
     void this.refreshToday();
+    void this.refreshClock();
   };
 }

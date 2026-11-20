@@ -248,6 +248,11 @@
   text-align: right;
 }
 
+.select--timezone {
+  width: 156px;
+  max-width: 156px;
+}
+
 .select:hover {
   background: var(--surface-active);
 }
@@ -356,4 +361,18 @@
 .action-button .icon {
   width: 13px;
   height: 13px;
+}
+
+.tray-color {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tray-color__palette {
+  width: 65px;
+}
+
+.tray-color__preview {
+  flex: 0 0 16px;
 }

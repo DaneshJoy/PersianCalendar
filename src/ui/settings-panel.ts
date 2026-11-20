@@ -14,7 +14,7 @@ import type {
   FontChoice,
   Settings,
   ThemeMode,
-  TrayIconMode,
+  ClockLayout,
   WeekStart,
   WidgetSize,
 } from "../types";
@@ -24,6 +24,7 @@ export interface SettingsPanelDeps {
   settings: SettingsStore;
   /** Clears the events cache and reloads the displayed month. */
   onClearCache: () => Promise<void>;
+  getClockZones: () => Promise<string[]>;
 }
 
 interface PresetAccent {
@@ -38,6 +39,7 @@ const ACCENT_PRESETS: PresetAccent[] = [
   { value: "#7c5cff", label: "بنفش" },
   { value: "#e8890c", label: "نارنجی" },
   { value: "#d9485f", label: "قرمز" },
+  { value: "#d5a100", label: "زرد" },
 ];
 
 /** −3 … +3 day shift for the lunar date, labelled with Persian digits. */
@@ -50,6 +52,23 @@ const LUNAR_OFFSET_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 2, label: "+۲" },
   { value: 3, label: "+۳" },
 ];
+
+const ZONE_LABELS = new Map([
+  ["local", "منطقهٔ زمانی ویندوز"],
+  ["Iran Standard Time", "ایران · تهران"],
+  ["GMT Standard Time", "بریتانیا · لندن"],
+  ["W. Europe Standard Time", "اروپای مرکزی · برلین"],
+  ["Turkey Standard Time", "ترکیه · استانبول"],
+  ["Arabian Standard Time", "امارات · دبی"],
+  ["India Standard Time", "هند · دهلی نو"],
+  ["Eastern Standard Time", "شرق آمریکا · نیویورک"],
+  ["Pacific Standard Time", "غرب آمریکا · لس‌آنجلس"],
+  ["UTC", "زمان جهانی · UTC"],
+]);
+
+export function clockZoneLabel(zone: string): string {
+  return ZONE_LABELS.get(zone) ?? zone;
+}
 
 export class SettingsPanel {
   private readonly syncers: Array<() => void> = [];
@@ -78,6 +97,8 @@ export class SettingsPanel {
     panel.append(this.buildHeader());
 
     const body = el("div", "settings__body");
+    this.buildClock(body);
+    this.buildCapsule(body);
     this.buildAppearance(body);
     this.buildDisplay(body);
     this.buildBehavior(body);
@@ -149,6 +170,153 @@ export class SettingsPanel {
     return header;
   }
 
+  private buildClock(body: HTMLElement): void {
+    const group = this.section(body, "ساعت دوم");
+    const toggle = this.toggle(
+      () => this.settings.clockEnabled,
+      (clockEnabled) => this.update({ clockEnabled }),
+    );
+    toggle.setAttribute("aria-label", "ساعت دوم در نوار وظیفه");
+    group.append(this.row("نمایش در نوار وظیفه", toggle));
+
+    const select = el("select", "select select--timezone");
+    select.setAttribute("aria-label", "منطقهٔ زمانی ساعت دوم");
+    select.addEventListener("change", () => this.update({ clockZone: select.value }));
+    const sync = (): void => {
+      select.value = this.settings.clockZone;
+      select.disabled = !this.settings.clockEnabled;
+    };
+    this.syncers.push(sync);
+    group.append(this.row("منطقهٔ زمانی", select));
+    const layout = this.select<ClockLayout>(
+      [{ value: "inline", label: "تک‌خطی (ساعت:دقیقه)" }, { value: "stacked", label: "دو ردیفه" }],
+      () => this.settings.clockLayout,
+      (clockLayout) => this.update({ clockLayout }),
+    );
+    layout.setAttribute("aria-label", "شیوهٔ نمایش ساعت");
+    group.append(this.row("شیوهٔ نمایش", layout));
+
+    const seconds = this.toggle(
+      () => this.settings.clockSeconds,
+      (clockSeconds) => this.update({ clockSeconds }),
+    );
+    seconds.setAttribute("aria-label", "نمایش ثانیهٔ ساعت دوم");
+    group.append(
+      this.row("رنگ عدد ساعت", this.trayColorControl("clockHourColor", "رنگ عدد ساعت")),
+      this.row("رنگ عدد دقیقه", this.trayColorControl("clockMinuteColor", "رنگ عدد دقیقه")),
+      this.row("نمایش ثانیه", seconds),
+      this.row("رنگ عدد ثانیه", this.trayColorControl("clockSecondColor", "رنگ عدد ثانیه")),
+    );
+
+    const initialZone = this.settings.clockZone;
+    const fill = (zones: string[]): void => {
+      select.replaceChildren();
+      for (const zone of new Set(["local", ...zones])) {
+        const option = el("option", undefined, clockZoneLabel(zone));
+        option.value = zone;
+        option.dir = zone === clockZoneLabel(zone) ? "ltr" : "rtl";
+        select.append(option);
+      }
+      sync();
+    };
+    fill([initialZone]);
+    void this.deps.getClockZones().then(fill).catch((error) => {
+      console.error("clock zones unavailable", error);
+    });
+  }
+
+  private buildCapsule(body: HTMLElement): void {
+    const group = this.section(body, "کپسول تقویم");
+    const toggle = this.toggle(
+      () => this.settings.capsuleEnabled,
+      (capsuleEnabled) => this.update({ capsuleEnabled }),
+    );
+    toggle.setAttribute("aria-label", "نمایش کپسول کنار آیکون‌های نوار وظیفه");
+    group.append(this.row("نمایش کپسول", toggle));
+    group.append(this.row("رنگ عدد روز", this.trayColorControl("calendarDayColor", "رنگ عدد روز")));
+
+    const interval = el("select", "select");
+    interval.setAttribute("aria-label", "فاصلهٔ نمایش مناسبت‌ها");
+    const seconds = [30, ...Array.from({ length: 30 }, (_, index) => (index + 1) * 60)];
+    for (const value of seconds) {
+      const option = el("option");
+      option.value = String(value);
+      interval.append(option);
+    }
+    interval.addEventListener("change", () => this.update({ capsuleIntervalSeconds: Number(interval.value) }));
+    this.syncers.push(() => {
+      interval.value = String(this.settings.capsuleIntervalSeconds);
+      interval.disabled = !this.settings.capsuleEnabled;
+      for (const [index, value] of seconds.entries()) {
+        const digit = fmtNumber(value === 30 ? 30 : value / 60, this.settings.digits);
+        interval.options[index].textContent = value === 30 ? `${digit} ثانیه` : `${digit} دقیقه`;
+      }
+    });
+    group.append(
+      this.row("فاصلهٔ نمایش مناسبت‌ها", interval),
+      el("p", "settings__note", "با خاموش بودن کپسول، شمارهٔ روز شمسی روی آیکون تقویم دیده می‌شود."),
+      el("p", "settings__note", "برای دریافت مناسبت‌های روز، دریافت آنلاین مناسبت‌ها را در بخش رفتار روشن کنید."),
+    );
+  }
+
+  private trayColorControl(
+    field: "clockHourColor" | "clockMinuteColor" | "clockSecondColor" | "calendarDayColor",
+    label: string,
+  ): HTMLElement {
+    const holder = el("div", "tray-color");
+    const palette = el("select", "select tray-color__palette");
+    palette.setAttribute("aria-label", `${label} از فهرست رنگ‌ها`);
+    const choices = [
+      { value: "", label: "خودکار" },
+      ...ACCENT_PRESETS,
+      { value: "#151821", label: "مشکی" },
+      { value: "#ffffff", label: "سفید" },
+      { value: "custom", label: "سفارشی" },
+    ];
+    for (const choice of choices) {
+      const option = el("option", undefined, choice.label);
+      option.value = choice.value;
+      palette.append(option);
+    }
+
+    const input = el("input", "custom-accent-input");
+    input.type = "text";
+    input.maxLength = 7;
+    input.dir = "ltr";
+    input.spellcheck = false;
+    input.placeholder = "#RRGGBB";
+    input.setAttribute("aria-label", `کد ${label}`);
+    const swatch = el("span", "custom-accent-preview tray-color__preview");
+    swatch.setAttribute("aria-hidden", "true");
+    const sync = (): void => {
+      const color = this.settings[field];
+      palette.value = color === null ? "" : choices.some((entry) => entry.value === color) ? color : "custom";
+      swatch.style.backgroundColor = color ?? "var(--text)";
+      if (document.activeElement !== input) input.value = color ?? "";
+    };
+    palette.addEventListener("change", () => {
+      if (palette.value === "custom") {
+        input.focus();
+        return;
+      }
+      input.classList.remove("is-invalid");
+      this.update({ [field]: palette.value || null });
+    });
+    input.addEventListener("input", () => {
+      const raw = input.value.trim();
+      const color = normalizeHex(raw.startsWith("#") ? raw : `#${raw}`);
+      input.classList.toggle("is-invalid", raw !== "" && color === null);
+      if (raw === "" || color !== null) this.update({ [field]: color });
+    });
+    input.addEventListener("blur", () => {
+      input.classList.remove("is-invalid");
+      sync();
+    });
+    holder.append(palette, input, swatch);
+    this.syncers.push(sync);
+    return holder;
+  }
+
   private buildAppearance(body: HTMLElement): void {
     const group = this.section(body, "ظاهر");
 
@@ -201,20 +369,6 @@ export class SettingsPanel {
 
   private buildDisplay(body: HTMLElement): void {
     const group = this.section(body, "نمایش");
-
-    group.append(
-      this.row(
-        "آیکون Tray",
-        this.segmented<TrayIconMode>(
-          [
-            { value: "day", label: "عدد" },
-            { value: "static", label: "ثابت" },
-          ],
-          () => this.settings.trayIconMode,
-          (trayIconMode) => this.update({ trayIconMode }),
-        ),
-      ),
-    );
 
     group.append(
       this.row(
@@ -326,16 +480,6 @@ export class SettingsPanel {
 
     group.append(
       this.row(
-        "بستن با کلیک بیرون",
-        this.toggle(
-          () => this.settings.closeOnBlur,
-          (closeOnBlur) => this.update({ closeOnBlur }),
-        ),
-      ),
-    );
-
-    group.append(
-      this.row(
         "ویجت دسکتاپ",
         this.toggle(
           () => this.settings.widgetEnabled,
@@ -370,6 +514,12 @@ export class SettingsPanel {
       ),
     );
 
+    const onlineEvents = this.toggle(
+      () => this.settings.onlineEvents,
+      (onlineEvents) => this.update({ onlineEvents }),
+    );
+    onlineEvents.setAttribute("aria-label", "دریافت آنلاین مناسبت‌ها و تاریخ قمری");
+    group.append(this.row("دریافت آنلاین مناسبت‌ها و تاریخ قمری", onlineEvents));
     const cacheButton = el("button", "action-button", "پاک کردن کش مناسبت‌ها");
     cacheButton.type = "button";
     cacheButton.addEventListener("click", () => {

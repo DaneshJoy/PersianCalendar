@@ -5,16 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>ویجت تقویم شمسی</title>
-    <script>
-      // Avoid a light flash in dark mode before the settings are loaded.
-      try {
-        document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-      } catch (error) {
-        document.documentElement.dataset.theme = "light";
-      }
-    </script>
   </head>
   <body class="widget-body">
     <div id="app"></div>

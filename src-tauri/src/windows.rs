@@ -1,9 +1,7 @@
 //! Popup and desktop-widget window management.
 //!
-//! The popup window is declared in `tauri.conf.json` with `visible: false` and
-//! is only hidden/shown at runtime, so reopening it is instant. The desktop
-//! widget is created lazily (only when the user enables it) and stays hidden
-//! between uses as well.
+//! The popup is created on first use, after the native tray icons are running.
+//! Both the popup and the optional desktop widget remain available between uses.
 //!
 //! Popup placement is computed manually from the physical tray-icon rect and the
 //! monitor work area: the window is centred over the tray icon, sits on the
@@ -280,16 +278,212 @@ fn compute_popup_position(
 // Popup window
 // ---------------------------------------------------------------------------
 
-/// Show the popup, positioned next to the tray icon when its rect is known.
-///
-/// Errors are logged instead of propagated: a failed focus request (for example
-/// because Windows' foreground-window lock refused it) must never take the app
-/// down.
-pub fn show_popup(app: &AppHandle, tray_rect: Option<Rect>) {
-    let Some(window) = app.get_webview_window(POPUP_LABEL) else {
-        eprintln!("[popup] window '{POPUP_LABEL}' is not available");
+struct PopupRequest {
+    tray_rect: Option<Rect>,
+    action: Option<(&'static str, serde_json::Value)>,
+}
+
+struct PopupLaunch {
+    creating: bool,
+    ready: bool,
+    request: Option<PopupRequest>,
+}
+
+static POPUP_LAUNCH: Mutex<PopupLaunch> = Mutex::new(PopupLaunch {
+    creating: false,
+    ready: false,
+    request: None,
+});
+
+#[cfg(windows)]
+static POPUP_SESSION: AtomicU64 = AtomicU64::new(0);
+
+pub fn create_configured_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == label)
+        .ok_or(tauri::Error::WindowNotFound)?;
+    WebviewWindowBuilder::from_config(app, config)?.build()
+}
+
+/// Prevent Windows from painting a native caption on our frameless WebViews.
+/// Called on the UI thread, before the hidden window is presented.
+#[cfg(windows)]
+pub fn prepare_frameless(window: &WebviewWindow, transparent: bool) {
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::Dwm::{DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY},
+        UI::{
+            Shell::{DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass},
+            WindowsAndMessaging::{
+                GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                WM_ERASEBKGND, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT, WS_CAPTION,
+                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+            },
+        },
+    };
+
+    unsafe extern "system" fn frameless_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        id: usize,
+        transparent: usize,
+    ) -> LRESULT {
+        match msg {
+            WM_NCCALCSIZE | WM_NCPAINT => 0,
+            WM_NCACTIVATE => unsafe { DefSubclassProc(hwnd, msg, wparam, -1) },
+            WM_ERASEBKGND if transparent != 0 => 1,
+            WM_NCDESTROY => unsafe {
+                RemoveWindowSubclass(hwnd, Some(frameless_proc), id);
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            },
+            _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    let Ok(window) = window.hwnd() else {
         return;
     };
+    let hwnd = window.0 as HWND;
+    const ID: usize = 1;
+    let mut installed = 0;
+    unsafe {
+        if GetWindowSubclass(hwnd, Some(frameless_proc), ID, &mut installed) != 0 {
+            return;
+        }
+        if SetWindowSubclass(hwnd, Some(frameless_proc), ID, usize::from(transparent)) == 0 {
+            return;
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) & !((WS_CAPTION | WS_THICKFRAME) as isize);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+        if transparent {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+                | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) as isize;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
+        }
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY as u32,
+            (&DWMNCRP_DISABLED as *const i32).cast(),
+            4,
+        );
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+}
+
+pub fn show_native_error(title: &str, error: &impl std::fmt::Display) {
+    eprintln!("[PersianCalendar] {title}: {error}");
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let message: Vec<u16> = format!("{title}\n\n{error}")
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        let caption: Vec<u16> = "PersianCalendar".encode_utf16().chain([0]).collect();
+        // Both strings are local and nul-terminated for the synchronous dialog.
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                caption.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            )
+        };
+    }
+}
+
+pub fn show_popup(app: &AppHandle, tray_rect: Option<Rect>) {
+    request_popup(
+        app,
+        PopupRequest {
+            tray_rect,
+            action: None,
+        },
+    );
+}
+
+fn request_popup(app: &AppHandle, request: PopupRequest) {
+    let exists = app.get_webview_window(POPUP_LABEL).is_some();
+    {
+        let mut launch = POPUP_LAUNCH.lock().unwrap();
+        launch.request = Some(request);
+        if launch.creating {
+            return;
+        }
+        if !exists {
+            launch.creating = true;
+            launch.ready = false;
+        }
+    }
+    if exists {
+        show_requested_popup(app);
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let result = create_configured_window(&handle, POPUP_LABEL);
+        {
+            let mut launch = POPUP_LAUNCH.lock().unwrap();
+            launch.creating = false;
+            if result.is_err() {
+                launch.ready = false;
+                launch.request = None;
+            }
+        }
+        match result {
+            Ok(_) => show_requested_popup(&handle),
+            Err(err) => show_native_error("باز کردن پنجرهٔ تقویم ناموفق بود", &err),
+        }
+    });
+}
+
+/// The popup calls this once its tray menu event handlers are registered.
+#[tauri::command]
+pub fn popup_ready(app: AppHandle) {
+    POPUP_LAUNCH.lock().unwrap().ready = true;
+    show_requested_popup(&app);
+}
+
+fn show_requested_popup(app: &AppHandle) {
+    let request = {
+        let mut launch = POPUP_LAUNCH.lock().unwrap();
+        if launch.creating || !launch.ready {
+            return;
+        }
+        launch.request.take()
+    };
+    if let Some(request) = request {
+        let handle = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || present_popup(&handle, request)) {
+            eprintln!("[popup] cannot schedule show: {error}");
+        }
+    }
+}
+
+fn present_popup(app: &AppHandle, request: PopupRequest) {
+    let Some(window) = app.get_webview_window(POPUP_LABEL) else {
+        return;
+    };
+    let tray_rect = request.tray_rect;
+
+    #[cfg(windows)]
+    prepare_frameless(&window, false);
 
     match compute_popup_position(app, &window, tray_rect) {
         Some(position) => {
@@ -300,6 +494,8 @@ pub fn show_popup(app: &AppHandle, tray_rect: Option<Rect>) {
         None => eprintln!("[popup] no monitor information, keeping the current position"),
     }
 
+    #[cfg(windows)]
+    let previous_foreground = popup_dismissal::foreground();
     if let Err(err) = window.show() {
         eprintln!("[popup] cannot show window: {err}");
         return;
@@ -309,15 +505,136 @@ pub fn show_popup(app: &AppHandle, tray_rect: Option<Rect>) {
     if let Err(err) = window.set_focus() {
         eprintln!("[popup] cannot focus window: {err}");
     }
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        popup_dismissal::watch(app.clone(), hwnd.0 as usize, previous_foreground);
+    }
+    if let Some((name, payload)) = request.action {
+        if let Err(err) = app.emit_to(POPUP_LABEL, name, payload) {
+            eprintln!("[popup] cannot emit {name}: {err}");
+        }
+    }
 }
 
 /// Hide the popup without destroying it (cheap to reopen).
 pub fn hide_popup(app: &AppHandle) {
+    #[cfg(windows)]
+    POPUP_SESSION.fetch_add(1, Ordering::AcqRel);
     let Some(window) = app.get_webview_window(POPUP_LABEL) else {
         return;
     };
     if let Err(err) = window.hide() {
         eprintln!("[popup] cannot hide window: {err}");
+    }
+}
+
+#[cfg(windows)]
+mod popup_dismissal {
+    use super::{hide_popup, AppHandle, Bounds, Manager, Ordering, POPUP_SESSION};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::{
+        Foundation::{HWND, POINT},
+        UI::{
+            HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
+            WindowsAndMessaging::{
+                GetAncestor, GetCursorPos, GetForegroundWindow, WindowFromPoint, GA_ROOTOWNER,
+            },
+        },
+    };
+
+    pub fn foreground() -> usize {
+        unsafe { GetForegroundWindow() as usize }
+    }
+
+    fn root_owner(window: HWND) -> usize {
+        unsafe { GetAncestor(window, GA_ROOTOWNER) as usize }
+    }
+
+    fn mouse_buttons() -> [bool; 3] {
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+            .map(|button| (unsafe { GetAsyncKeyState(i32::from(button)) }) < 0)
+    }
+
+    enum Click {
+        Inside,
+        Toggle,
+        Outside,
+    }
+
+    fn click_target(app: &AppHandle, popup: usize) -> Click {
+        let mut point = POINT::default();
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return Click::Inside;
+        }
+        let target = root_owner(unsafe { WindowFromPoint(point) });
+        if target == popup {
+            return Click::Inside;
+        }
+        let capsule = app
+            .get_webview_window(crate::capsule::LABEL)
+            .and_then(|window| window.hwnd().ok())
+            .map(|hwnd| hwnd.0 as usize);
+        let over_tray_icon = crate::tray::any_notification_icon_visible()
+            && crate::tray::last_tray_rect()
+                .map(Bounds::from_tray_rect)
+                .is_some_and(|rect| {
+                    point.x >= rect.left
+                        && point.x < rect.right
+                        && point.y >= rect.top
+                        && point.y < rect.bottom
+                });
+        if capsule == Some(target) || over_tray_icon {
+            Click::Toggle
+        } else {
+            Click::Outside
+        }
+    }
+
+    pub fn watch(app: AppHandle, popup: usize, previous_foreground: usize) {
+        let session = POPUP_SESSION.fetch_add(1, Ordering::AcqRel) + 1;
+        std::thread::spawn(move || {
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+            let mut keys = mouse_buttons();
+            let mut own_focus = false;
+            let mut allow_focus_dismissal = Instant::now() + Duration::from_millis(170);
+            while POPUP_SESSION.load(Ordering::Acquire) == session {
+                let now = Instant::now();
+                let next_keys = mouse_buttons();
+                let clicked = next_keys
+                    .iter()
+                    .zip(keys)
+                    .any(|(down, was_down)| *down && !was_down);
+                keys = next_keys;
+                if clicked {
+                    match click_target(&app, popup) {
+                        Click::Outside => break,
+                        // Let the surface's click handler toggle the window on release.
+                        Click::Toggle => allow_focus_dismissal = now + Duration::from_millis(200),
+                        Click::Inside => {}
+                    }
+                }
+                let foreground = foreground();
+                if foreground == popup || root_owner(foreground as HWND) == popup {
+                    own_focus = true;
+                } else if foreground != 0
+                    && (own_focus || foreground != previous_foreground)
+                    && now >= allow_focus_dismissal
+                    && !keys.into_iter().any(|down| down)
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if POPUP_SESSION.load(Ordering::Acquire) == session {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if POPUP_SESSION.load(Ordering::Acquire) == session {
+                        hide_popup(&handle);
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -335,11 +652,14 @@ pub fn toggle_popup(app: &AppHandle, tray_rect: Option<Rect>) {
 }
 
 /// Show the popup and emit an event to the frontend (tray menu actions).
-pub fn show_popup_and_emit(app: &AppHandle, event_name: &str, payload: serde_json::Value) {
-    show_popup(app, crate::tray::last_tray_rect());
-    if let Err(err) = app.emit(event_name, payload) {
-        eprintln!("[popup] cannot emit {event_name}: {err}");
-    }
+pub fn show_popup_and_emit(app: &AppHandle, event_name: &'static str, payload: serde_json::Value) {
+    request_popup(
+        app,
+        PopupRequest {
+            tray_rect: crate::tray::last_tray_rect(),
+            action: Some((event_name, payload)),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -496,25 +816,20 @@ fn widget_position(app: &AppHandle, settings: &Settings) -> Option<PhysicalPosit
 /// Persist the widget position into the in-memory settings, the store, and let
 /// the frontend know through `settings-changed`.
 pub fn save_widget_position(app: &AppHandle, x: i32, y: i32) {
-    let state = app.state::<AppState>();
-    let snapshot = {
-        let mut guard = match state.settings.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.widget_x == Some(x) && guard.widget_y == Some(y) {
-            return; // nothing changed (e.g. our own set_position)
-        }
-        guard.widget_x = Some(x);
-        guard.widget_y = Some(y);
-        guard.clone()
-    };
-
-    if let Err(err) = settings::persist(app, &snapshot) {
-        eprintln!("[widget] cannot persist position: {err}");
+    let current = current_settings(app);
+    if current.widget_x == Some(x) && current.widget_y == Some(y) {
+        return;
     }
-    if let Err(err) = app.emit("settings-changed", &snapshot) {
-        eprintln!("[widget] cannot emit settings-changed: {err}");
+    match settings::update(app, |current| {
+        let mut next = current.clone();
+        next.widget_x = Some(x);
+        next.widget_y = Some(y);
+        Ok(next)
+    }) {
+        Ok(next) => {
+            let _ = app.emit("settings-changed", &next);
+        }
+        Err(err) => eprintln!("[widget] cannot persist position: {err}"),
     }
 }
 

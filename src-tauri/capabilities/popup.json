@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popup",
+  "description": "دسترسی‌های پنجرهٔ تقویم",
+  "windows": [
+    "popup"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings",
+    "allow-get-theme",
+    "allow-get-today-info",
+    "allow-get-month-events",
+    "allow-refresh-month-events",
+    "allow-save-settings",
+    "allow-reset-settings",
+    "allow-clear-events-cache",
+    "allow-copy-text",
+    "allow-hide-popup",
+    "allow-get-clock",
+    "allow-get-clock-zones",
+    "allow-popup-ready"
+  ]
+}

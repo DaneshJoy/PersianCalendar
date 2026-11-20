@@ -17,6 +17,7 @@ import {
   jdnOf,
   monthLength,
   todayJalali,
+  toFaDigits,
   weekdayOf,
 } from "../calendar";
 import type { Bridge } from "../bridge";
@@ -195,8 +196,8 @@ export function createDevBridge(): Bridge {
     isTauri: false,
     windowLabel: document.body.classList.contains("widget-body") ? "widget" : "popup",
     getSettings: async () => ({ ...settings }),
-    saveSettings: async (next: Settings) => {
-      settings = { ...next };
+    saveSettings: async (next: Partial<Settings>) => {
+      settings = { ...settings, ...next };
       writeSettings(settings);
       return { ...settings };
     },
@@ -221,6 +222,21 @@ export function createDevBridge(): Bridge {
       await delay(180);
       return monthEvents(year, month);
     },
+    getClock: async () => {
+      if (!settings.clockEnabled) return null;
+      const reading = new Intl.DateTimeFormat("en-GB", {
+        timeZone: settings.clockZone === "Iran Standard Time" ? "Asia/Tehran" : undefined,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: settings.clockSeconds ? "2-digit" : undefined,
+        hourCycle: "h23",
+      }).format(new Date());
+      return {
+        time: settings.digits === "fa" ? toFaDigits(reading) : reading,
+        date: todayInfo().labels.slash,
+      };
+    },
+    getClockZones: async () => ["Iran Standard Time"],
     clearEventsCache: async () => {
       eventsCache.clear();
     },
@@ -234,12 +250,7 @@ export function createDevBridge(): Bridge {
     hidePopup: async () => {
       console.debug("[dev] hide_popup");
     },
-    showPopup: async () => {
-      console.debug("[dev] show_popup");
-    },
-    quitApp: async () => {
-      console.debug("[dev] quit_app");
-    },
+    popupReady: async () => {},
     requestOpenSettings: async () => {
       console.debug("[dev] open-settings");
     },

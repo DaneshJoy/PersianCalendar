@@ -260,6 +260,7 @@ pub fn fa_digits(s: &str) -> String {
 }
 
 /// Convert Persian (`۰-۹`) and Arabic-Indic (`٠-٩`) digits to ASCII `0-9`.
+#[cfg(test)]
 pub fn en_digits(s: &str) -> String {
     s.chars()
         .map(|c| match c {

@@ -357,7 +357,6 @@ export class WidgetView {
 
   private async openPopupSettings(): Promise<void> {
     try {
-      await this.deps.bridge.showPopup();
       await this.deps.bridge.requestOpenSettings();
     } catch (error) {
       console.error("widget: open settings failed", error);
