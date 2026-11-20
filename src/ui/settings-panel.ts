@@ -206,6 +206,7 @@ export class SettingsPanel {
       this.row("رنگ عدد دقیقه", this.trayColorControl("clockMinuteColor", "رنگ عدد دقیقه")),
       this.row("نمایش ثانیه", seconds),
       this.row("رنگ عدد ثانیه", this.trayColorControl("clockSecondColor", "رنگ عدد ثانیه")),
+      el("p", "settings__note", "وقتی ساعت دوم روشن است، تقویم و مناسبت‌ها از منطقهٔ زمانی همین ساعت پیروی می‌کنند."),
     );
 
     const initialZone = this.settings.clockZone;

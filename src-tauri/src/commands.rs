@@ -103,7 +103,7 @@ pub async fn refresh_month_events(app: AppHandle, year: i32, month: u32) -> Mont
 pub fn clear_events_cache(app: AppHandle) -> Result<(), String> {
     let events = app.state::<AppState>().events.clone();
     events.clear_cache()?;
-    let date = today::today_jalaali();
+    let date = today::today_jalaali(&app);
     let _ = app.emit(
         "events-updated",
         serde_json::json!({ "year": date.year, "month": date.month }),

@@ -657,14 +657,15 @@ export class PopupView {
   }
 
   private handleTodayChanged(info: TodayInfo): void {
-    const previousToday = this.todayDate();
-    const cursorWasToday = this.cursor !== null && cal.sameDate(this.cursor, previousToday);
+    const follow = cal.followsToday(this.view, this.cursor, this.todayDate());
     this.today = info;
-    if (cursorWasToday) {
+    if (follow) {
       const nextToday = this.todayDate();
-      this.cursor = nextToday;
-      this.view = { jy: nextToday.jy, jm: nextToday.jm };
-      void this.loadMonth();
+      if (this.cursor) this.cursor = nextToday;
+      if (this.view.jy !== nextToday.jy || this.view.jm !== nextToday.jm) {
+        this.view = { jy: nextToday.jy, jm: nextToday.jm };
+        void this.loadMonth();
+      }
     }
     this.render();
   }

@@ -90,6 +90,8 @@ fn main() {
                 events: Arc::new(EventsState::new(cache_dir)),
             });
 
+            // Capture the rollover baseline before any startup display reads the date.
+            let startup_day = today::today_jalaali(&handle);
             // Register the native tray icons before any optional WebView is opened.
             let date_icon = tray::refresh_date(&handle);
             let clock_icon = clock::refresh(&handle);
@@ -100,7 +102,7 @@ fn main() {
 
             windows::apply_widget(&handle);
             capsule::start(handle.clone());
-            clock::start(handle.clone());
+            clock::start(handle.clone(), startup_day);
             scheduler::start(handle.clone());
             scheduler::refresh_daily(&handle);
 

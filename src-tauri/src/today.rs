@@ -1,13 +1,14 @@
 //! Today's date in all needed shapes, plus formatting helpers shared by the
 //! tray, the menu, the tooltip and the IPC layer.
 
+use chrono::Utc;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::events_api::{DayInfo, EventsState, LunarDate};
 use crate::jalaali::{self, GDate, JDate};
 use crate::settings::{CopyFormat, EventsMode, Settings, LUNAR_OFFSET_MAX, LUNAR_OFFSET_MIN};
-use crate::AppState;
+use crate::{clock, AppState};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,8 +64,14 @@ pub fn current_settings(app: &AppHandle) -> Settings {
     settings
 }
 
-pub fn today_jalaali() -> JDate {
-    jalaali::today_local().0
+pub fn dates(settings: &Settings) -> (JDate, GDate) {
+    let now = Utc::now();
+    let clock_date = clock::reading_at(settings, now).map(|reading| reading.date());
+    jalaali::calendar_dates_at(now, clock_date)
+}
+
+pub fn today_jalaali(app: &AppHandle) -> JDate {
+    dates(&current_settings(app)).0
 }
 
 /// Right-to-left mark (U+200F) prefixed to a line.
@@ -210,7 +217,7 @@ pub fn displayed_occasions(
 /// Build the full today payload used by IPC and events.
 pub fn build(app: &AppHandle) -> TodayInfo {
     let settings = current_settings(app);
-    let (j, g): (JDate, GDate) = jalaali::today_local();
+    let (j, g) = dates(&settings);
     let events = app.state::<AppState>().events.clone();
 
     // Occasions and the holiday badge both honour `lunarOffset`.
@@ -256,7 +263,7 @@ pub fn build(app: &AppHandle) -> TodayInfo {
 pub fn copy_text_for(app: &AppHandle, format: CopyFormat) -> String {
     let settings = current_settings(app);
     let fa = settings.fa_digits();
-    let (j, g) = jalaali::today_local();
+    let (j, g) = dates(&settings);
     match format {
         CopyFormat::JalaliSlash => jalaali::format_slash(&j, fa),
         CopyFormat::JalaliLong => jalaali::format_long(&j, fa),
@@ -266,29 +273,30 @@ pub fn copy_text_for(app: &AppHandle, format: CopyFormat) -> String {
 
 /// All three copy variants (used by the tray submenu).
 pub fn copy_variants(app: &AppHandle) -> (String, String, String) {
+    let settings = current_settings(app);
+    let fa = settings.fa_digits();
+    let (j, g) = dates(&settings);
     (
-        copy_text_for(app, CopyFormat::JalaliSlash),
-        copy_text_for(app, CopyFormat::JalaliLong),
-        copy_text_for(app, CopyFormat::GregorianIso),
+        jalaali::format_slash(&j, fa),
+        jalaali::format_long(&j, fa),
+        jalaali::format_iso(&g),
     )
 }
 
 /// Two-line tray tooltip: full Persian date, then occasion / holiday, then the
 /// Gregorian date when the user enabled it.
-pub fn tooltip_text(app: &AppHandle) -> String {
-    let settings = current_settings(app);
-    let (j, g) = jalaali::today_local();
+pub fn tooltip_text(app: &AppHandle, settings: &Settings, j: &JDate, g: &GDate) -> String {
     let fa = settings.fa_digits();
     let weekday = jalaali::WEEKDAY_NAMES_FA
         .get(jalaali::day_of_week(j.year, j.month, j.day) as usize)
         .copied()
         .unwrap_or("");
-    let mut lines = vec![rtl(&format!("{weekday} {}", jalaali::format_long(&j, fa)))];
+    let mut lines = vec![rtl(&format!("{weekday} {}", jalaali::format_long(j, fa)))];
 
     if settings.show_events {
         let events = app.state::<AppState>().events.clone();
-        let (holiday, day_events) = displayed_occasions(&events, &settings, &j);
-        let first_event = visible_events(&settings, &day_events, holiday)
+        let (holiday, day_events) = displayed_occasions(&events, settings, j);
+        let first_event = visible_events(settings, &day_events, holiday)
             .into_iter()
             .next();
         match first_event {
@@ -299,7 +307,7 @@ pub fn tooltip_text(app: &AppHandle) -> String {
     }
 
     if settings.show_gregorian {
-        let line = format!("{} | {}", jalaali::format_iso(&g), "میلادی");
+        let line = format!("{} | {}", jalaali::format_iso(g), "میلادی");
         lines.push(rtl(&line));
         // Keep the line tidy: drop the redundant Persian word if too long.
         if lines.len() > 3 {

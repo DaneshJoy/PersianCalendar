@@ -1,11 +1,11 @@
 //! Independent, offline clock for the Windows notification area.
 
-use chrono::{Datelike, Timelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    icon, jalaali,
+    icon, jalaali, scheduler,
     settings::{ClockLayout, Settings},
     theme, today, tray,
 };
@@ -36,7 +36,11 @@ impl Reading {
         }
     }
 
-    fn info(&self, fa: bool) -> ClockInfo {
+    pub fn date(&self) -> jalaali::JDate {
+        self.date
+    }
+
+    pub fn info(&self, fa: bool) -> ClockInfo {
         let time = match self.second {
             Some(second) => format!("{:02}:{:02}:{second:02}", self.hour, self.minute),
             None => format!("{:02}:{:02}", self.hour, self.minute),
@@ -124,10 +128,13 @@ pub fn valid_zone(zone: &str) -> bool {
 }
 
 pub fn reading(settings: &Settings) -> Option<Reading> {
+    reading_at(settings, Utc::now())
+}
+
+pub fn reading_at(settings: &Settings, now: DateTime<Utc>) -> Option<Reading> {
     if !settings.clock_enabled {
         return None;
     }
-    let now = Utc::now();
     if settings.clock_zone == LOCAL_ZONE {
         let local = now.with_timezone(&chrono::Local);
         return Some(Reading::from_time(local, settings.clock_seconds));
@@ -157,19 +164,25 @@ pub fn get_clock(app: AppHandle) -> Option<ClockInfo> {
 }
 
 /// A dedicated wait keeps calendar, theme, and events handling off the minute boundary.
-pub fn start(app: AppHandle) {
+pub fn start(app: AppHandle, mut day: jalaali::JDate) {
     std::thread::spawn(move || {
         let timer = crate::minute_timer::ClockTimer::new();
         let mut settings = today::current_settings(&app);
-        let mut previous = reading(&settings);
+        let now = Utc::now();
+        let mut previous = reading_at(&settings, now);
         loop {
             timer.wait(settings.clock_enabled && settings.clock_seconds);
             settings = today::current_settings(&app);
-            let current = reading(&settings);
-            if current != previous {
+            let now = Utc::now();
+            let current = reading_at(&settings, now);
+            let next_day = jalaali::calendar_dates_at(now, current.as_ref().map(Reading::date)).0;
+            if next_day != day {
+                scheduler::refresh_today(&app);
+                day = next_day;
+            } else if current != previous {
                 tray::refresh_clock(&app);
-                previous = current;
             }
+            previous = current;
         }
     });
 }
@@ -277,5 +290,36 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tehran_reading_and_calendar_advance_to_aban_30_at_the_same_instant() {
+        use chrono::TimeZone;
+
+        let settings = Settings {
+            clock_enabled: true,
+            clock_seconds: true,
+            ..Settings::default()
+        };
+        let midnight = Utc.with_ymd_and_hms(2026, 11, 20, 20, 30, 0).unwrap();
+        let before = midnight - chrono::Duration::seconds(1);
+        let reading = reading_at(&settings, before).unwrap();
+        assert_eq!(reading.info(false).time, "23:59:59");
+        assert_eq!(
+            jalaali::calendar_dates_at(before, Some(reading.date()))
+                .0
+                .day,
+            29
+        );
+
+        let reading = reading_at(&settings, midnight).unwrap();
+        assert_eq!(reading.info(false).time, "00:00:00");
+        assert_eq!(
+            jalaali::calendar_dates_at(midnight, Some(reading.date()))
+                .0
+                .day,
+            30
+        );
     }
 }

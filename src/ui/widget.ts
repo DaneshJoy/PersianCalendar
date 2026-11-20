@@ -410,10 +410,13 @@ export class WidgetView {
   }
 
   private handleTodayChanged(info: TodayInfo): void {
-    const previousToday = this.todayDate();
-    const cursorWasToday = this.cursor !== null && cal.sameDate(this.cursor, previousToday);
+    const follow = cal.followsToday(this.view, this.cursor, this.todayDate());
     this.today = info;
-    if (cursorWasToday) this.cursor = this.todayDate();
+    if (follow) {
+      const nextToday = this.todayDate();
+      if (this.cursor) this.cursor = nextToday;
+      this.view = { jy: nextToday.jy, jm: nextToday.jm };
+    }
     this.render();
     if (this.deps.settings.settings.widgetSize === "full") void this.loadMonth();
   }

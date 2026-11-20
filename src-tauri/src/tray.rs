@@ -88,18 +88,18 @@ fn show_date_icon(settings: &Settings, fallback_allowed: bool) -> bool {
     !settings.capsule_enabled || fallback_allowed
 }
 
-/// Render today's local Solar Hijri day and provide the full date in the tooltip.
+/// Render today's Solar Hijri day and provide the full date in the tooltip.
 pub fn refresh_date(app: &AppHandle) -> tauri::Result<()> {
     let settings = current_settings(app);
     let content = show_date_icon(&settings, capsule::fallback_allowed()).then(|| {
-        let day = today::today_jalaali().day;
+        let (date, civil_date) = today::dates(&settings);
         let color = icon::text_color(
             settings.calendar_day_color.as_deref(),
             theme::tray_icon_is_light(),
         );
         (
-            icon::render_day(day, settings.fa_digits(), color, tray_icon_px(app)),
-            today::tooltip_text(app),
+            icon::render_day(date.day, settings.fa_digits(), color, tray_icon_px(app)),
+            today::tooltip_text(app, &settings, &date, &civil_date),
         )
     });
     DATE_ICON.update(app, content)
@@ -256,7 +256,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 pub fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "today" => {
-            let date = today::today_jalaali();
+            let date = today::today_jalaali(app);
             windows::show_popup_and_emit(
                 app,
                 "show-month",

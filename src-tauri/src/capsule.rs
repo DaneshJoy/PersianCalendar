@@ -129,7 +129,10 @@ pub fn get_capsule_data(app: AppHandle) -> CapsuleData {
     use tauri::Manager;
 
     let settings = today::current_settings(&app);
-    let date = today::today_jalaali();
+    let now = chrono::Utc::now();
+    let reading = clock::reading_at(&settings, now);
+    let date = jalaali::calendar_dates_at(now, reading.as_ref().map(clock::Reading::date)).0;
+    let fa = settings.fa_digits();
     let day = date.day.to_string();
     let mut events = Vec::new();
     if settings.show_events {
@@ -150,15 +153,13 @@ pub fn get_capsule_data(app: AppHandle) -> CapsuleData {
     let inline_clock = inline(&settings);
     CapsuleData {
         date: jalaali::format_slash(&date, false),
-        day: if settings.fa_digits() {
-            jalaali::fa_digits(&day)
-        } else {
-            day
-        },
+        day: if fa { jalaali::fa_digits(&day) } else { day },
         day_color: settings.calendar_day_color,
         calendar_enabled: settings.capsule_enabled,
         inline_clock,
-        clock: inline_clock.then(|| clock::get_clock(app)).flatten(),
+        clock: reading
+            .filter(|_| inline_clock)
+            .map(|reading| reading.info(fa)),
         hour_color: settings.clock_hour_color,
         minute_color: settings.clock_minute_color,
         second_color: settings.clock_second_color,

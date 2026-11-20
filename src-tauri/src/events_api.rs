@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::jalaali;
+use crate::{jalaali, today};
 
 pub const BASE_URL: &str = "https://pnldev.com/api/calender";
 pub const USER_AGENT: &str =
@@ -697,8 +697,8 @@ impl EventsState {
     }
 
     /// True when cached data for this month must be re-fetched.
-    fn is_expired(&self, year: i32, month: u32, fetched_at: i64) -> bool {
-        let (today, _) = jalaali::today_local();
+    fn is_expired(&self, app: &AppHandle, year: i32, month: u32, fetched_at: i64) -> bool {
+        let today = today::today_jalaali(app);
         let is_past = year < today.year || (year == today.year && month < today.month);
         if is_past {
             return false; // past months never expire
@@ -779,7 +779,7 @@ impl EventsState {
         let cached = self.cached_month(year, month);
 
         let stale = match &cached {
-            Some(data) => self.is_expired(year, month, data.fetched_at),
+            Some(data) => self.is_expired(app, year, month, data.fetched_at),
             None => true,
         };
 
@@ -895,7 +895,7 @@ impl EventsState {
     /// Fetch a month into the cache if it is missing or expired (polite prefetch).
     pub async fn prefetch_if_needed(&self, app: &AppHandle, year: i32, month: u32) {
         if let Some(cached) = self.cached_month(year, month) {
-            if !self.is_expired(year, month, cached.fetched_at) {
+            if !self.is_expired(app, year, month, cached.fetched_at) {
                 return;
             }
         }
@@ -907,7 +907,7 @@ impl EventsState {
             return;
         }
         if let Some(cached) = self.cached_month(year, month) {
-            if !self.is_expired(year, month, cached.fetched_at) {
+            if !self.is_expired(app, year, month, cached.fetched_at) {
                 return;
             }
         }

@@ -1,6 +1,6 @@
 [package]
 name = "persian-calendar"
-version = "1.0.8"
+version = "1.0.9"
 description = "تقویم شمسی مینیمال برای ویندوز"
 authors = ["PersianCalendar"]
 edition = "2021"

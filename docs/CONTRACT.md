@@ -162,7 +162,7 @@ open_popup_settings(): void // ویجت می‌تواند تنظیمات پاپ�
 | `theme-changed` | `{ mode, system }` | تم ویندوز عوض شد |
 | `taskbar-placement` | `boolean` | جای ناحیهٔ اعلان در سمت راست نوار وظیفه |
 | `clock-changed` | `{ time, date }` یا `null` | زمان و تاریخ شمسی ساعت دوم |
-| `today-changed` | `TodayInfo` | نیمه‌شب/بیدارشدن/تغییر تاریخ |
+| `today-changed` | `TodayInfo` | تغییر تاریخ در منطقهٔ زمانی ساعت دومِ روشن یا منطقهٔ زمانی ویندوز |
 | `events-updated` | `{ year, month }` | کش/شبکه ماه به‌روز شد؛ اگر همان ماه در حال نمایش است رفرش کن |
 | `open-settings` | `{}` | از منوی tray: پنل تنظیمات را باز کن |
 | `show-month` | `{ year, month }` | از منوی tray: پاپ‌آپ را به این ماه ببر |

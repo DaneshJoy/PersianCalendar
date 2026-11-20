@@ -162,6 +162,11 @@ export function sameDate(a: JDate, b: JDate): boolean {
   return a.jy === b.jy && a.jm === b.jm && a.jd === b.jd;
 }
 
+/** Keep following today while the user is viewing its month and has not picked another day. */
+export function followsToday(view: Pick<JDate, "jy" | "jm">, selected: JDate | null, today: JDate): boolean {
+  return view.jy === today.jy && view.jm === today.jm && (selected === null || sameDate(selected, today));
+}
+
 export function isFriday(date: JDate): boolean {
   return weekdayOf(date) === 6;
 }
