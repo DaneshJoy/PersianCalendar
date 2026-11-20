@@ -7,7 +7,7 @@ export type ThemeMode = "auto" | "light" | "dark";
 export type ThemeValue = "light" | "dark";
 export type Digits = "fa" | "en";
 export type FontChoice = "vazirmatn" | "system";
-export type TrayIconMode = "day" | "static";
+export type ClockLayout = "inline" | "stacked";
 export type WeekStart = 0 | 1 | 2;
 export type EventsMode = "important" | "all";
 export type CopyFormat = "jalaliSlash" | "jalaliLong" | "gregorianIso";
@@ -18,18 +18,27 @@ export interface Settings {
   accent: string;
   digits: Digits;
   font: FontChoice;
-  trayIconMode: TrayIconMode;
+  clockEnabled: boolean;
+  clockLayout: ClockLayout;
+  clockZone: string;
+  clockHourColor: string | null;
+  clockMinuteColor: string | null;
+  clockSeconds: boolean;
+  clockSecondColor: string | null;
+  calendarDayColor: string | null;
+  capsuleEnabled: boolean;
+  capsuleIntervalSeconds: number;
   weekStart: WeekStart;
   showGregorian: boolean;
   showLunar: boolean;
   /** Whole-day shift applied to the lunar (Hijri) date: -3 … +3. */
   lunarOffset: number;
   showEvents: boolean;
+  onlineEvents: boolean;
   eventsMode: EventsMode;
   showWeekNumber: boolean;
   copyFormat: CopyFormat;
   autostart: boolean;
-  closeOnBlur: boolean;
   widgetEnabled: boolean;
   widgetSize: WidgetSize;
   /** 30 … 100 */
@@ -44,17 +53,26 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: "#2f6fed",
   digits: "fa",
   font: "vazirmatn",
-  trayIconMode: "day",
+  clockEnabled: false,
+  clockLayout: "inline",
+  clockZone: "Iran Standard Time",
+  clockHourColor: null,
+  clockMinuteColor: null,
+  clockSeconds: false,
+  clockSecondColor: null,
+  calendarDayColor: null,
+  capsuleEnabled: false,
+  capsuleIntervalSeconds: 60,
   weekStart: 0,
   showGregorian: false,
   showLunar: false,
   lunarOffset: 0,
   showEvents: true,
+  onlineEvents: false,
   eventsMode: "important",
   showWeekNumber: false,
   copyFormat: "jalaliSlash",
   autostart: false,
-  closeOnBlur: true,
   widgetEnabled: false,
   widgetSize: "full",
   widgetOpacity: 92,
@@ -62,6 +80,11 @@ export const DEFAULT_SETTINGS: Settings = {
   widgetX: null,
   widgetY: null,
 };
+
+export interface ClockInfo {
+  time: string;
+  date: string;
+}
 
 export interface JalaliToday {
   year: number;
@@ -93,7 +116,7 @@ export interface TodayInfo {
   labels: { slash: string; long: string; iso: string };
 }
 
-export type EventsSource = "cache" | "network" | "none";
+export type EventsSource = "cache" | "network" | "builtin" | "none";
 
 /** Lunar month (1 … 12) and day (1 … 30) parsed from an occasion's date hint. */
 export interface LunarMonthDay {
@@ -144,6 +167,7 @@ export interface EventPayloads {
   "settings-changed": Settings;
   "theme-changed": ThemeInfo;
   "today-changed": TodayInfo;
+  "clock-changed": ClockInfo | null;
   "events-updated": { year: number; month: number };
   "open-settings": Record<string, never>;
   "show-month": { year: number; month: number };

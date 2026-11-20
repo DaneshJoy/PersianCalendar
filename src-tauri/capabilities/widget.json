@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "widget",
+  "description": "دسترسی‌های ویجت دسکتاپ",
+  "windows": [
+    "widget"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "allow-get-settings",
+    "allow-get-theme",
+    "allow-get-today-info",
+    "allow-get-month-events",
+    "allow-refresh-month-events",
+    "allow-save-widget-settings",
+    "allow-open-popup-settings"
+  ]
+}

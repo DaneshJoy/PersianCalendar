@@ -8,11 +8,12 @@
  * used so the UI can be developed/previewed without the Rust shell.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type {
   AppEventName,
+  ClockInfo,
   EventPayloads,
   MonthEvents,
   Settings,
@@ -22,17 +23,18 @@ import type {
 
 export interface Bridge {
   getSettings(): Promise<Settings>;
-  saveSettings(settings: Settings): Promise<Settings>;
+  saveSettings(settings: Partial<Settings>): Promise<Settings>;
   resetSettings(): Promise<Settings>;
   getTheme(): Promise<ThemeInfo>;
   getTodayInfo(): Promise<TodayInfo>;
+  getClock(): Promise<ClockInfo | null>;
+  getClockZones(): Promise<string[]>;
   getMonthEvents(year: number, month: number): Promise<MonthEvents>;
   refreshMonthEvents(year: number, month: number): Promise<MonthEvents>;
   clearEventsCache(): Promise<void>;
   copyText(text: string): Promise<void>;
   hidePopup(): Promise<void>;
-  showPopup(): Promise<void>;
-  quitApp(): Promise<void>;
+  popupReady(): Promise<void>;
   /** Widget → popup: show the popup and ask it to open its settings panel. */
   requestOpenSettings(): Promise<void>;
   listen<K extends AppEventName>(event: K, handler: (payload: EventPayloads[K]) => void): Promise<UnlistenFn>;
@@ -51,10 +53,14 @@ function currentWindowLabel(): string {
 
 const tauriBridge: Bridge = {
   getSettings: () => invoke<Settings>("get_settings"),
-  saveSettings: (settings) => invoke<Settings>("save_settings", { settings }),
+  saveSettings: (settings) => invoke<Settings>(
+    currentWindowLabel() === "widget" ? "save_widget_settings" : "save_settings", { settings },
+  ),
   resetSettings: () => invoke<Settings>("reset_settings"),
   getTheme: () => invoke<ThemeInfo>("get_theme"),
   getTodayInfo: () => invoke<TodayInfo>("get_today_info"),
+  getClock: () => invoke<ClockInfo | null>("get_clock"),
+  getClockZones: () => invoke<string[]>("get_clock_zones"),
   getMonthEvents: (year, month) => invoke<MonthEvents>("get_month_events", { year, month }),
   refreshMonthEvents: (year, month) => invoke<MonthEvents>("refresh_month_events", { year, month }),
   clearEventsCache: async () => {
@@ -66,16 +72,8 @@ const tauriBridge: Bridge = {
   hidePopup: async () => {
     await invoke("hide_popup");
   },
-  showPopup: async () => {
-    await invoke("show_popup");
-  },
-  quitApp: async () => {
-    await invoke("quit_app");
-  },
-  requestOpenSettings: async () => {
-    // Cross-window notification using the contract's `open-settings` event.
-    await emit("open-settings", {});
-  },
+  popupReady: () => invoke("popup_ready"),
+  requestOpenSettings: () => invoke("open_popup_settings"),
   listen: <K extends AppEventName>(event: K, handler: (payload: EventPayloads[K]) => void) =>
     listen<EventPayloads[K]>(event, (received) => handler(received.payload)),
   get windowLabel(): string {
@@ -105,7 +103,13 @@ let bridgePromise: Promise<Bridge> | null = null;
  */
 export function createBridge(): Promise<Bridge> {
   if (!bridgePromise) {
-    bridgePromise = isTauriRuntime() ? Promise.resolve(tauriBridge) : loadDevBridge();
+    if (isTauriRuntime()) {
+      bridgePromise = Promise.resolve(tauriBridge);
+    } else if (import.meta.env.DEV) {
+      bridgePromise = loadDevBridge();
+    } else {
+      bridgePromise = Promise.reject(new Error("Tauri runtime unavailable"));
+    }
   }
   return bridgePromise;
 }

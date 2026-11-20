@@ -3,6 +3,9 @@
    one-line footer, hover tooltip, toast and the day context menu.
    ================================================================== */
 
+:root { --surface: #f4f5f7; }
+:root[data-theme="dark"] { --surface: #20242b; }
+
 .popup {
   position: relative;
   display: flex;
@@ -47,6 +50,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   transition: background-color var(--dur-fast) var(--ease);
+}
+
+.popup__clock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding-inline: 5px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.popup__clock-time {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.popup__clock-zone {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup__clock-date,
+.popup__clock-zone {
+  font-size: 10.5px;
+  color: var(--text-secondary);
 }
 
 .popup__title:hover {

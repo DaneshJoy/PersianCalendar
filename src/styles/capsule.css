@@ -1,0 +1,158 @@
+@font-face {
+  font-family: Vazirmatn;
+  src: url("../assets/fonts/Vazirmatn-Regular.woff2") format("woff2");
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: Vazirmatn;
+  src: url("../assets/fonts/Vazirmatn-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+}
+
+:root {
+  color-scheme: light;
+  --capsule-top: #fbfafc;
+  --capsule-bottom: #f0edf4;
+  --capsule-edge: #d5cfdf;
+  --capsule-text: #302b39;
+  --capsule-day: #3a2f59;
+  --day-background: #e6e0f2;
+  --clock-text: #211d2b;
+  --shine: rgb(255 255 255 / 70%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --capsule-top: #2d2838;
+  --capsule-bottom: #211d2a;
+  --capsule-edge: #4b435b;
+  --capsule-text: #f0ebf7;
+  --capsule-day: #e8dcff;
+  --day-background: #433957;
+  --clock-text: #f5f0fa;
+  --shine: rgb(255 255 255 / 7%);
+}
+
+* { box-sizing: border-box; }
+
+html, .capsule-body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.capsule-body {
+  display: flex;
+  align-items: center;
+  direction: rtl;
+  font: 400 12px / 1.4 Vazirmatn, "Segoe UI", sans-serif;
+  user-select: none;
+}
+
+.capsule-body.tray-left { direction: ltr; }
+
+.taskbar-surfaces {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: min(38px, 100%);
+  max-width: 100%;
+}
+
+.taskbar-surfaces button {
+  appearance: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.taskbar-surfaces button[hidden] { display: none; }
+
+.taskbar-clock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--clock-width, 62px);
+  width: var(--clock-width, 62px);
+  height: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--clock-text);
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.taskbar-surfaces .taskbar-clock {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.taskbar-clock.has-seconds { --clock-width: 88px; }
+.taskbar-clock__hour { color: var(--hour-color, var(--clock-text)); }
+.taskbar-clock__minute { color: var(--minute-color, var(--clock-text)); }
+.taskbar-clock__second { color: var(--second-color, var(--clock-text)); }
+.taskbar-clock__colon { margin-inline: 1px; }
+
+.taskbar-surfaces .calendar-capsule {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 100%;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid var(--capsule-edge);
+  border-radius: 999px;
+  background: linear-gradient(var(--capsule-top), var(--capsule-bottom));
+  box-shadow: inset 0 1px 0 var(--shine);
+  color: var(--capsule-text);
+  direction: rtl;
+}
+
+.calendar-capsule:hover .calendar-capsule__day { filter: brightness(1.08); }
+
+.calendar-capsule__day {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--day-background);
+  color: var(--day-color, var(--capsule-day));
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.calendar-capsule__window {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.has-event .calendar-capsule__window {
+  margin-inline: 6px 8px;
+  visibility: visible;
+}
+
+.calendar-capsule__event {
+  display: block;
+  flex: 0 0 auto;
+  unicode-bidi: isolate;
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .calendar-capsule__window { display: block; }
+  .calendar-capsule__event {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

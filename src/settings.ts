@@ -77,12 +77,15 @@ export function applyAppearance(settings: Settings, themeInfo: ThemeInfo): void 
 
 export class SettingsStore {
   private state: Settings;
+  private saved: Settings;
+  private queued: Partial<Settings> = {};
+  private savingPatch: Partial<Settings> = {};
   private theme: ThemeInfo;
   private readonly listeners = new Set<(settings: Settings) => void>();
   private readonly statusListeners = new Set<(status: SaveStatus) => void>();
   private saveTimer: number | null = null;
-  private saving = false;
-  private dirty = false;
+  private savePromise: Promise<void> | null = null;
+  private resetting = false;
   private status: SaveStatus = { state: "idle", at: 0 };
 
   private constructor(
@@ -91,6 +94,7 @@ export class SettingsStore {
     themeInfo: ThemeInfo,
   ) {
     this.state = { ...initial };
+    this.saved = { ...initial };
     this.theme = { ...themeInfo };
   }
 
@@ -141,15 +145,15 @@ export class SettingsStore {
 
   /** Optimistic local update, then a debounced `save_settings`. */
   set(patch: Partial<Settings>): void {
-    this.state = { ...this.state, ...patch };
-    this.notify();
+    Object.assign(this.queued, patch);
+    this.reconcile();
     this.scheduleSave();
   }
 
   /** Full replacement coming from Rust (`settings-changed` event). */
   replace(next: Settings): void {
-    this.state = { ...next };
-    this.notify();
+    this.saved = { ...next };
+    this.reconcile();
   }
 
   setThemeInfo(themeInfo: ThemeInfo): void {
@@ -158,16 +162,29 @@ export class SettingsStore {
   }
 
   async reset(): Promise<void> {
+    this.resetting = true;
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.queued = {};
+    this.reconcile();
+
     try {
+      await this.savePromise;
       this.setStatus("saving");
-      const defaults = await this.bridge.resetSettings();
-      this.state = { ...defaults };
+      this.replace(await this.bridge.resetSettings());
       this.setStatus("saved");
-      this.notify();
     } catch (error) {
-      console.error("reset_settings failed", error);
       this.setStatus("error");
+      throw error;
+    } finally {
+      this.resetting = false;
+      if (Object.keys(this.queued).length > 0) this.scheduleSave();
     }
+  }
+
+  private reconcile(): void {
+    this.state = { ...this.saved, ...this.savingPatch, ...this.queued };
+    this.notify();
   }
 
   private notify(): void {
@@ -181,38 +198,31 @@ export class SettingsStore {
 
   private scheduleSave(): void {
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    if (this.saving) {
-      this.dirty = true;
-      return;
-    }
+    if (this.savePromise || this.resetting) return;
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
-      void this.flush();
+      this.savePromise = this.flush().finally(() => {
+        this.savePromise = null;
+        if (Object.keys(this.queued).length > 0) this.scheduleSave();
+      });
     }, SAVE_DEBOUNCE_MS);
   }
 
   private async flush(): Promise<void> {
-    if (this.saving) {
-      this.dirty = true;
-      return;
-    }
-    this.saving = true;
-    try {
-      do {
-        this.dirty = false;
-        this.setStatus("saving");
-        const sent = { ...this.state };
-        const persisted = await this.bridge.saveSettings(sent);
+    while (!this.resetting && Object.keys(this.queued).length > 0) {
+      this.savingPatch = this.queued;
+      this.queued = {};
+      this.setStatus("saving");
+      try {
+        this.saved = await this.bridge.saveSettings(this.savingPatch);
         this.setStatus("saved");
-        // Only adopt the backend echo when nothing changed while saving,
-        // otherwise the newer local values would be overwritten.
-        if (!this.dirty) this.state = { ...sent, ...persisted };
-      } while (this.dirty);
-    } catch (error) {
-      console.error("save_settings failed", error);
-      this.setStatus("error");
-    } finally {
-      this.saving = false;
+      } catch (error) {
+        console.error("save_settings failed", error);
+        this.setStatus("error");
+      } finally {
+        this.savingPatch = {};
+        this.reconcile();
+      }
     }
   }
 }

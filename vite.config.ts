@@ -25,6 +25,7 @@ export default defineConfig({
       input: {
         popup: resolve(rootDirectory, "index.html"),
         widget: resolve(rootDirectory, "widget.html"),
+        capsule: resolve(rootDirectory, "capsule.html"),
       },
     },
   },

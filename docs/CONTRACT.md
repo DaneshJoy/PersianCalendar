@@ -8,18 +8,29 @@
 - Tauri v2 (Rust) + Vite + Vanilla TypeScript
 - تبدیل تاریخ در فرانت: `jalaali-js`
 - دریافت مناسبت‌ها: `reqwest` با `rustls-tls` در Rust، کش JSON در `app_cache_dir/events/`
-- پلاگین‌ها: `single-instance`, `autostart`, `positioner` (با feature `tray-icon`), `store`, `clipboard-manager`
+- پلاگین‌ها: `single-instance`، `store` و `clipboard-manager`. اجرای خودکار در رجیستری کاربر جاری ثبت می‌شود.
 - فونت: Vazirmatn به‌صورت محلی (در `src/assets/fonts/*.woff2` و `src-tauri/assets/*.ttf`)
 
 ## پنجره‌ها (Labels)
 
 | label | توضیح |
 |---|---|
-| `popup` | پاپ‌آپ تقویم؛ در `tauri.conf.json` تعریف شده؛ `visible: false`، بدون دکوراسیون، شفاف، alwaysOnTop، skipTaskbar، غیرقابل resize |
+| `popup` | پاپ‌آپ تقویم؛ در `tauri.conf.json` تعریف شده؛ `visible: false`، بدون دکوراسیون، پس‌زمینهٔ یکدست، alwaysOnTop، skipTaskbar، غیرقابل resize |
 | `widget` | ویجت دسکتاپ؛ در زمان اجرا توسط Rust ساخته می‌شود؛ شفاف، بدون دکوراسیون، alwaysOnBottom، skipTaskbar |
 
 ورودی‌ها: `index.html` → `src/main.ts` (popup) و `widget.html` → `src/widget-main.ts` (widget).
 هر دو از `getCurrentWindow().label` استفاده می‌کنند.
+
+ورودی کپسول `capsule.html` است. پنجرهٔ `capsule` از مجوز خواندن دادهٔ روز و
+دریافت رویدادهای تغییر استفاده می‌کند. جای پنجره با مستطیل نوار وظیفه و مستطیل‌های
+کنترل‌های آن محاسبه می‌شود. کلیک روی کپسول یا ساعت منوی برنامه یا پاپ‌آپ تقویم را باز می‌کند.
+ناحیهٔ تعاملی بر اساس محتوای قابل مشاهده محدود می‌شود. پنجره درست بالای
+خود نوار وظیفه در ترتیب لایه‌های ویندوز قرار می‌گیرد. تشخیص تمام‌صفحه و انتخاب ناحیهٔ
+Snipping Tool نما را موقتاً پنهان می‌کند و فرمان‌های کلیک همان وضعیت را بررسی می‌کنند.
+
+پاپ‌آپ و کپسول با `create: false` تعریف شده‌اند تا آیکون بومی ناحیهٔ
+اعلان پیش از WebView ثبت شوند. درخواست اولیهٔ منوی پاپ‌آپ تا دریافت `popup_ready`
+نگه داشته می‌شود.
 
 ## تنظیمات (Settings) — شکل JSON کانونیک
 
@@ -32,17 +43,26 @@
   "accent": "#2f6fed",         // #rrggbb
   "digits": "fa",              // "fa" | "en"
   "font": "vazirmatn",         // "vazirmatn" | "system"
-  "trayIconMode": "day",       // "day" | "static"
+  "clockEnabled": false,
+  "clockLayout": "inline",       // "inline" | "stacked"
+  "clockHourColor": null,        // #rrggbb یا خودکار
+  "clockMinuteColor": null,
+  "clockSeconds": false,
+  "clockSecondColor": null,
+  "calendarDayColor": null,
+  "capsuleEnabled": false,
+  "capsuleIntervalSeconds": 60,  // ۳۰ ثانیه یا مضرب ۶۰ تا ۱۸۰۰
+  "clockZone": "Iran Standard Time", // شناسهٔ منطقهٔ ویندوز یا "local"
   "weekStart": 0,              // 0=شنبه، 1=یکشنبه، 2=دوشنبه
   "showGregorian": false,
   "showLunar": false,
   "lunarOffset": 0,            // -3..3؛ جابه‌جایی لایه‌ی قمری (تاریخ/مناسبت/تعطیلات)
   "showEvents": true,
+  "onlineEvents": false,
   "eventsMode": "important",   // "important" | "all"
   "showWeekNumber": false,
   "copyFormat": "jalaliSlash", // "jalaliSlash" | "jalaliLong" | "gregorianIso"
   "autostart": false,
-  "closeOnBlur": true,
   "widgetEnabled": false,
   "widgetSize": "full",        // "small" | "full"
   "widgetOpacity": 92,         // 30..100
@@ -52,17 +72,27 @@
 }
 ```
 
-ذخیره خودکار: فرانت‌اند بعد از هر تغییر، کل آبجکت را با `save_settings` (debounce ~250ms) می‌فرستد.
+ذخیره خودکار: فرانت‌اند بعد از هر تغییر، فیلدهای تغییرکرده را با `save_settings` (debounce ~250ms) می‌فرستد.
 Rust پس از ذخیره، عوارض جانبی را اعمال می‌کند: تم، آیکون tray، tooltip، منوی tray، autostart، ویجت.
 
 ## دستورها (invoke)
 
 ```ts
 get_settings(): Settings
-save_settings(settings: Settings): Settings     // جایگزینی کامل + اعمال عوارض
+save_settings(settings: Partial<Settings>): Settings
+save_widget_settings(settings: Partial<Settings>): Settings // گزینه‌های اندازه، قفل و نمایش
 reset_settings(): Settings                       // برگشت به پیش‌فرض
-set_autostart(enabled: boolean): boolean
-get_autostart(): boolean
+get_clock_zones(): string[]
+get_clock(): { time: string; date: string } | null
+get_capsule_data(): {
+  date: string; day: string; dayColor: string | null; calendarEnabled: boolean;
+  inlineClock: boolean; clock: { time: string; date: string } | null;
+  hourColor: string | null; minuteColor: string | null; secondColor: string | null;
+  events: string[]; intervalSeconds: number; dark: boolean;
+}
+set_taskbar_surface(bounds: { x: number; y: number; width: number; height: number } | null, calendar: boolean, clock: boolean): void
+open_taskbar_calendar(): void
+open_taskbar_menu(): void
 get_theme(): { mode: "light"|"dark", system: "light"|"dark" }  // mode طبق تنظیم، system تم ویندوز
 get_today_info(): TodayInfo
 get_month_events(year: number, month: number): MonthEvents
@@ -70,8 +100,8 @@ refresh_month_events(year: number, month: number): MonthEvents  // صرف‌نظ
 clear_events_cache(): void
 copy_text(text: string): void
 hide_popup(): void
-show_popup(): void
-quit_app(): void
+popup_ready(): void // بعد از ثبت گیرنده‌های رویداد پاپ‌آپ
+open_popup_settings(): void // ویجت می‌تواند تنظیمات پاپ‌آپ را باز کند
 ```
 
 `TodayInfo`:
@@ -96,7 +126,7 @@ quit_app(): void
 ```ts
 {
   year: number; month: number;
-  source: "cache" | "network" | "none";
+  source: "cache" | "network" | "builtin";
   stale: boolean;            // کش منقضی نمایش داده شد
   days: Record<string, {     // کلید = شماره‌ی روز
     holiday: boolean;
@@ -130,14 +160,15 @@ quit_app(): void
 |---|---|---|
 | `settings-changed` | `Settings` | تنظیمات از سمت Rust عوض شد (مثلاً autostart یا موقعیت ویجت) |
 | `theme-changed` | `{ mode, system }` | تم ویندوز عوض شد |
-| `today-changed` | `TodayInfo` | نیمه‌شب/بیدارشدن/تغییر تاریخ |
+| `taskbar-placement` | `boolean` | جای ناحیهٔ اعلان در سمت راست نوار وظیفه |
+| `clock-changed` | `{ time, date }` یا `null` | زمان و تاریخ شمسی ساعت دوم |
+| `today-changed` | `TodayInfo` | تغییر تاریخ در منطقهٔ زمانی ساعت دومِ روشن یا منطقهٔ زمانی ویندوز |
 | `events-updated` | `{ year, month }` | کش/شبکه ماه به‌روز شد؛ اگر همان ماه در حال نمایش است رفرش کن |
 | `open-settings` | `{}` | از منوی tray: پنل تنظیمات را باز کن |
 | `show-month` | `{ year, month }` | از منوی tray: پاپ‌آپ را به این ماه ببر |
 | `copied` | `{ what: string }` | متن کپی شد (نمایش نشانگر کوتاه) |
 
-فرانت‌اند هنگام `online` شدن پنجره، `refresh_month_events` ماه جاری را صدا بزند
-(حداقل فاصله‌ی ۵ دقیقه را Rust خودش رعایت می‌کند).
+هنگام بازگشت اتصال، فرانت‌اند می‌تواند `refresh_month_events` را برای ماه نمایشی فراخوانی کند. زمان‌بند Rust ماه جاری را حتی با پنجرهٔ بسته و طبق فاصلهٔ تلاش مجدد به‌روز می‌کند. «builtin» به مناسبت‌های ثابت شمسی و میلادی همراه برنامه اشاره دارد.
 
 ## تنظیمات ظاهری هم‌شکل
 
@@ -182,6 +213,7 @@ quit_app(): void
 
 ## API مناسبت‌ها (تأییدشده با درخواست واقعی)
 
+- دریافت شبکه فقط با `onlineEvents: true` و فعال بودن نمایش مناسبت‌ها یا تاریخ قمری انجام می‌شود.
 - `GET https://pnldev.com/api/calender?year=Y&month=M` (بدون Auth؛ فقط year/month ارسال شود)
 - پاسخ ماهانه: `{ "status": true, "result": { "1": { solar, moon, gregorian, holiday, event: string[] }, ... } }`
 - پاسخ سالانه: `result[ماه][روز]` (ما فقط ماهانه می‌زنیم)
@@ -208,18 +240,13 @@ quit_app(): void
 
 ## آیکون و Tray
 
-- `icon.rs`: رندر RGBA با `ab_glyph` روی `image` خام (بدون وابستگی image)، اندازه ۳۲..۶۴ بر اساس DPI؛
-  فونت embed: `Vazirmatn-FD-Bold.ttf` برای ارقام فارسی (ASCII→۰-۹) و `Vazirmatn-Bold.ttf` برای ارقام لاتین.
-  رنگ عدد بر اساس تم ویندوز: تم روشن → عدد تیره (#1b1f27)، تم تیره → عدد روشن (#f2f5fa).
-  عدد با **auto-fit** رندر می‌شود: مقیاس فونت طوری انتخاب می‌شود که جعبه‌ی جوهر متن
-  (ink bbox) با حاشیه‌ی ~۱ پیکسل کل آیکون را پر کند (حالت `day`).
-- حالت‌ها: `day` عدد روز؛ `static` آیکون ثابت برنامه. مقدار ناشناخته/قدیمی
-  (مثل `dayMonth` حذف‌شده) به‌جای خراب کردن کل فایل تنظیمات، به `day` برمی‌گردد.
-- به‌روزرسانی: نیمه‌شب، بیدارشدن از sleep، تغییر تاریخ/ساعت/منطقه (چک ۶۰ ثانیه‌ای)، تغییر تنظیمات.
-- Tooltip: «پنجشنبه ۲۲ آبان ۱۴۰۵» + خط دوم مناسبت/تعطیل + خط میلادی در صورت روشن بودن.
-- منو و tooltip منوی native ویندوز چپ‌به‌راست چیده می‌شود؛ به همین دلیل هر خطی که
-  واژه و عدد را قاطی می‌کند با RLM (`\u{200F}`، تابع `today::rtl`) شروع می‌شود تا
-  ترتیب راست‌به‌چپ درست رندر شود.
+- ساعت تک‌خطی و عدد روز در یک پنجرهٔ سبک کنار ناحیهٔ اعلان رندر می‌شوند. ناحیهٔ تعاملی
+  از اندازهٔ محتوای قابل مشاهده تعیین می‌شود. پهنای کپسول و متغیرهای رنگ در فرانت‌اند تنظیم می‌شوند.
+- در چیدمان ردیفی، `icon.rs` ساعت را با `ab_glyph` در آیکون بومی ناحیهٔ اعلان رندر می‌کند.
+  در نمای پیش‌فرض، آیکون بومی تقویم شمارهٔ روز شمسی را نشان می‌دهد و راهنمای آن شامل تاریخ کامل است.
+  با فعال بودن کپسول، آیکون تاریخ هنگام آماده شدن نما پنهان می‌شود و پس از نبود پایدار نما دوباره در دسترس است.
+- مرز دقیقه یا ثانیه از ساعت سیستم ویندوز محاسبه می‌شود و با تغییر تنظیمات، زمان‌بندی فوراً به‌روز می‌شود. تاریخ و مناسبت کپسول با رویدادهای روز و کش به‌روز می‌شوند.
+
 
 ## منوی tray (فارسی، ارقام طبق تنظیم)
 
@@ -230,7 +257,7 @@ quit_app(): void
 - اجرا همراه ویندوز (checkbox)
 - خروج
 
-کلیک چپ = toggle پاپ‌آپ؛ راست = منو. پنجره با blur (اگر `closeOnBlur`) یا Esc پنهان شود.
+کلیک چپ = toggle پاپ‌آپ؛ راست = منو. پنجره با کلیک بیرون، دکمهٔ × یا Esc پنهان می‌شود.
 
 ## ویجت
 

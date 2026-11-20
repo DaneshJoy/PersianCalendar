@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>تقویم و ساعت نوار وظیفه</title>
+  </head>
+  <body class="capsule-body">
+    <main class="taskbar-surfaces">
+      <button type="button" class="taskbar-clock" dir="ltr" hidden aria-label="ساعت دوم">
+        <span class="taskbar-clock__hour"></span><span class="taskbar-clock__colon">:</span><span class="taskbar-clock__minute"></span>
+        <span class="taskbar-clock__colon taskbar-clock__second-separator" hidden>:</span><span class="taskbar-clock__second" hidden></span>
+      </button>
+      <button type="button" class="calendar-capsule" aria-label="باز کردن تقویم شمسی" hidden>
+        <span class="calendar-capsule__day" dir="ltr"></span>
+        <span class="calendar-capsule__window"><bdi class="calendar-capsule__event"></bdi></span>
+      </button>
+    </main>
+    <script type="module" src="/src/capsule-main.ts"></script>
+  </body>
+</html>

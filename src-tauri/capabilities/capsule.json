@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capsule",
+  "description": "داده و تعامل کپسول نوار وظیفه",
+  "windows": [
+    "capsule"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-capsule-data",
+    "allow-set-taskbar-surface",
+    "allow-open-taskbar-calendar",
+    "allow-open-taskbar-menu"
+  ]
+}

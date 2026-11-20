@@ -28,24 +28,24 @@ pub fn info(settings: &Settings) -> ThemeInfo {
 }
 
 /// Returns true when Windows is using the dark app theme.
-#[cfg(windows)]
 pub fn system_theme_is_dark() -> bool {
+    windows_theme_is_dark("AppsUseLightTheme")
+}
+
+#[cfg(windows)]
+fn windows_theme_is_dark(key_name: &str) -> bool {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
-    match hkcu.open_subkey_with_flags(path, KEY_READ) {
-        Ok(key) => match key.get_value::<u32, _>("AppsUseLightTheme") {
-            Ok(light) => light == 0,
-            Err(_) => false,
-        },
-        Err(_) => false,
-    }
+    hkcu.open_subkey_with_flags(path, KEY_READ)
+        .and_then(|key| key.get_value::<u32, _>(key_name))
+        .is_ok_and(|light| light == 0)
 }
 
 #[cfg(not(windows))]
-pub fn system_theme_is_dark() -> bool {
+fn windows_theme_is_dark(_: &str) -> bool {
     false
 }
 
@@ -66,5 +66,5 @@ pub fn resolve(mode: ThemeMode) -> &'static str {
 
 /// Text colour to render on the tray icon so it stays readable on the taskbar.
 pub fn tray_icon_is_light() -> bool {
-    system_theme_is_dark()
+    windows_theme_is_dark("SystemUsesLightTheme")
 }

@@ -31,6 +31,8 @@ async function loadTodayInfo(bridge: Bridge, settings: SettingsStore): Promise<T
 }
 
 export async function bootstrapServices(expectedWindow: WindowKind): Promise<AppServices> {
+  document.documentElement.dataset.theme =
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   const bridge = await createBridge();
   const windowLabel = bridge.windowLabel;
   document.body.dataset.window = windowLabel;

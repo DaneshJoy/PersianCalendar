@@ -12,7 +12,7 @@
 //! module touches the network. All functions are total: out-of-range years are
 //! clamped instead of panicking (the app only ever uses years around 1400).
 
-use chrono::{Datelike, Timelike};
+use chrono::{DateTime, Datelike, Local, Utc};
 use serde::Serialize;
 
 /// A Jalali (Shamsi) calendar date.
@@ -260,6 +260,7 @@ pub fn fa_digits(s: &str) -> String {
 }
 
 /// Convert Persian (`۰-۹`) and Arabic-Indic (`٠-٩`) digits to ASCII `0-9`.
+#[cfg(test)]
 pub fn en_digits(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -299,9 +300,17 @@ pub fn format_iso(g: &GDate) -> String {
     format!("{:04}-{:02}-{:02}", g.year, g.month, g.day)
 }
 
-/// Today's local date as `(Jalali, Gregorian)`.
-pub fn today_local() -> (JDate, GDate) {
-    let now = chrono::Local::now();
+/// Resolve the date shared by calendar surfaces from the enabled clock reading.
+pub fn calendar_dates_at(instant: DateTime<Utc>, clock_date: Option<JDate>) -> (JDate, GDate) {
+    match clock_date {
+        Some(date) => (date, to_gregorian(date.year, date.month, date.day)),
+        None => local_dates_at(instant),
+    }
+}
+
+/// The system-local date of a specific instant as `(Jalali, Gregorian)`.
+pub fn local_dates_at(instant: DateTime<Utc>) -> (JDate, GDate) {
+    let now = instant.with_timezone(&Local);
     let g = GDate {
         year: now.year(),
         month: now.month(),
@@ -309,26 +318,6 @@ pub fn today_local() -> (JDate, GDate) {
     };
     let j = to_jalaali(g.year, g.month, g.day);
     (j, g)
-}
-
-/// Seconds remaining until the next local midnight (at least 1).
-///
-/// A local day can be shorter or longer than 24h around DST transitions, so
-/// this resolves the actual next local midnight instead of assuming 86400.
-pub fn seconds_until_local_midnight() -> u64 {
-    use chrono::TimeZone;
-
-    let now = chrono::Local::now();
-    let tomorrow = now.date_naive() + chrono::Duration::days(1);
-    if let Some(naive) = tomorrow.and_hms_opt(0, 0, 0) {
-        if let Some(next) = chrono::Local.from_local_datetime(&naive).earliest() {
-            let diff = next.signed_duration_since(now).num_seconds();
-            return diff.max(1) as u64;
-        }
-    }
-    // Fallback: a plain 24h day. `num_seconds_from_midnight` is 0..=86399.
-    let elapsed = now.num_seconds_from_midnight() as u64;
-    (86400u64.saturating_sub(elapsed)).max(1)
 }
 
 #[cfg(test)]
@@ -581,17 +570,33 @@ mod tests {
     }
 
     #[test]
-    fn seconds_until_midnight_is_within_one_day() {
-        let s = seconds_until_local_midnight();
-        assert!((1..=86401).contains(&s), "unexpected seconds: {s}");
-    }
-
-    #[test]
     fn today_local_round_trips() {
-        let (j, g) = today_local();
+        let (j, g) = local_dates_at(Utc::now());
         assert_eq!(to_jalaali(g.year, g.month, g.day), j);
         assert!((1..=12).contains(&j.month));
         assert!((1..=31).contains(&j.day));
         assert!((1..=12).contains(&g.month));
+    }
+
+    #[test]
+    fn calendar_rolls_over_at_tehran_midnight_while_the_system_is_still_on_the_29th() {
+        use chrono::{FixedOffset, TimeZone};
+
+        let tehran = FixedOffset::east_opt(3 * 3600 + 30 * 60).unwrap();
+        let system = FixedOffset::west_opt(8 * 3600).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 11, 20, 20, 30, 0).unwrap();
+        let before = midnight - chrono::Duration::seconds(1);
+        let clock_date = |instant: DateTime<Utc>| {
+            let time = instant.with_timezone(&tehran);
+            to_jalaali(time.year(), time.month(), time.day())
+        };
+        let system_date = midnight.with_timezone(&system);
+        let old = calendar_dates_at(before, Some(clock_date(before)));
+        let new = calendar_dates_at(midnight, Some(clock_date(midnight)));
+        assert_eq!(system_date.day(), 20);
+        assert_eq!((old.0.year, old.0.month, old.0.day), (1405, 8, 29));
+        assert_eq!((new.0.year, new.0.month, new.0.day), (1405, 8, 30));
+        assert_eq!(format_iso(&new.1), "2026-11-21");
+        assert_eq!(calendar_dates_at(midnight, None), local_dates_at(midnight));
     }
 }

@@ -5,6 +5,7 @@ import {
   addDays,
   clampLunarOffset,
   fallbackTodayInfo,
+  followsToday,
   formatCopyLabel,
   formatGregorianIso,
   formatGregorianLong,
@@ -28,6 +29,14 @@ import {
  * calendar): 1405/08/22 == 2026-11-13 and that day is a Friday.
  */
 const DATE_1405_08_22 = { jy: 1405, jm: 8, jd: 22 };
+
+it("follows a rollover when showing today and preserves other days or months", () => {
+  const today = { jy: 1405, jm: 8, jd: 30 };
+  expect(followsToday({ jy: 1405, jm: 8 }, null, today)).toBe(true);
+  expect(followsToday({ jy: 1405, jm: 8 }, today, today)).toBe(true);
+  expect(followsToday({ jy: 1405, jm: 8 }, { ...today, jd: 29 }, today)).toBe(false);
+  expect(followsToday({ jy: 1405, jm: 7 }, null, today)).toBe(false);
+});
 
 describe("calendar grid", () => {
   it("lays out Aban 1405 correctly when the week starts on Saturday", () => {

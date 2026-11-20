@@ -6,8 +6,6 @@
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const invoke = window.__TAURI_INTERNALS__.invoke;
 
-  await invoke("show_popup");
-  await sleep(300);
   $('button[aria-label="تنظیمات"]').click();
   await sleep(300);
   const digitRow = $$(".settings__row").find((row) => row.textContent.includes("نوع ارقام"));

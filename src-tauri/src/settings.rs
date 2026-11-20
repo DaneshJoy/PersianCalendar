@@ -5,7 +5,7 @@
 //! IPC commands only; Rust is the single owner of the file.
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "settings.json";
@@ -40,26 +40,12 @@ pub enum FontChoice {
     System,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum TrayIconMode {
-    /// Only the Persian day number, e.g. «۲۲».
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockLayout {
     #[default]
-    Day,
-    /// A fixed calendar glyph.
-    Static,
-}
-
-impl<'de> Deserialize<'de> for TrayIconMode {
-    /// Unknown values (e.g. the removed `dayMonth`) fall back to `Day` so a
-    /// stale `settings.json` cannot reset the user's whole configuration.
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        Ok(match raw.as_str() {
-            "static" => Self::Static,
-            _ => Self::Day,
-        })
-    }
+    Inline,
+    Stacked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -96,18 +82,27 @@ pub struct Settings {
     pub accent: String,
     pub digits: DigitStyle,
     pub font: FontChoice,
-    pub tray_icon_mode: TrayIconMode,
+    pub clock_enabled: bool,
+    pub clock_layout: ClockLayout,
+    pub clock_zone: String,
+    pub clock_hour_color: Option<String>,
+    pub clock_minute_color: Option<String>,
+    pub clock_seconds: bool,
+    pub clock_second_color: Option<String>,
+    pub calendar_day_color: Option<String>,
+    pub capsule_enabled: bool,
+    pub capsule_interval_seconds: u32,
     pub week_start: u8,
     pub show_gregorian: bool,
     pub show_lunar: bool,
     /// Whole-day shift of the displayed lunar (Hijri) date: -3 … +3.
     pub lunar_offset: i32,
     pub show_events: bool,
+    pub online_events: bool,
     pub events_mode: EventsMode,
     pub show_week_number: bool,
     pub copy_format: CopyFormat,
     pub autostart: bool,
-    pub close_on_blur: bool,
     pub widget_enabled: bool,
     pub widget_size: WidgetSize,
     pub widget_opacity: u8,
@@ -123,17 +118,26 @@ impl Default for Settings {
             accent: "#2f6fed".to_string(),
             digits: DigitStyle::Fa,
             font: FontChoice::Vazirmatn,
-            tray_icon_mode: TrayIconMode::Day,
+            clock_enabled: false,
+            clock_layout: ClockLayout::Inline,
+            clock_zone: crate::clock::DEFAULT_ZONE.to_string(),
+            clock_hour_color: None,
+            clock_minute_color: None,
+            clock_seconds: false,
+            clock_second_color: None,
+            calendar_day_color: None,
+            capsule_enabled: false,
+            capsule_interval_seconds: 60,
             week_start: 0,
             show_gregorian: false,
             show_lunar: false,
             lunar_offset: 0,
             show_events: true,
+            online_events: false,
             events_mode: EventsMode::Important,
             show_week_number: false,
             copy_format: CopyFormat::JalaliSlash,
             autostart: false,
-            close_on_blur: true,
             widget_enabled: false,
             widget_size: WidgetSize::Full,
             widget_opacity: 92,
@@ -152,6 +156,25 @@ impl Settings {
 
     /// Clamp/normalise values arriving from the frontend or a stale config file.
     pub fn sanitize(&mut self) {
+        for color in [
+            &mut self.clock_hour_color,
+            &mut self.clock_minute_color,
+            &mut self.clock_second_color,
+            &mut self.calendar_day_color,
+        ] {
+            if color
+                .as_deref()
+                .is_some_and(|value| !is_valid_hex_color(value))
+            {
+                *color = None;
+            }
+        }
+        if self.capsule_interval_seconds != 30 {
+            self.capsule_interval_seconds = self.capsule_interval_seconds.clamp(60, 1800) / 60 * 60;
+        }
+        if !crate::clock::valid_zone(&self.clock_zone) {
+            self.clock_zone = crate::clock::LOCAL_ZONE.to_string();
+        }
         if self.week_start > 2 {
             self.week_start = 0;
         }
@@ -176,7 +199,7 @@ pub fn is_valid_hex_color(value: &str) -> bool {
 /// Load settings from the store, falling back to defaults for missing keys.
 pub fn load(app: &AppHandle) -> Settings {
     let mut settings = Settings::default();
-    match app.store(STORE_FILE) {
+    match app.store_builder(STORE_FILE).disable_auto_save().build() {
         Ok(store) => {
             if let Some(value) = store.get(STORE_KEY) {
                 match serde_json::from_value::<Settings>(value) {
@@ -195,14 +218,93 @@ pub fn load(app: &AppHandle) -> Settings {
 pub fn persist(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     let value = serde_json::to_value(settings).map_err(|e| e.to_string())?;
+    let previous = store.get(STORE_KEY);
     store.set(STORE_KEY, value);
-    store.save().map_err(|e| e.to_string())?;
+    if let Err(err) = store.save() {
+        if let Some(previous) = previous {
+            store.set(STORE_KEY, previous);
+        } else {
+            store.delete(STORE_KEY);
+        }
+        return Err(err.to_string());
+    }
     Ok(())
+}
+
+/// Persist a single edit before exposing it to other windows and the scheduler.
+pub fn update(
+    app: &AppHandle,
+    edit: impl FnOnce(&Settings) -> Result<Settings, String>,
+) -> Result<Settings, String> {
+    let state = app.state::<crate::AppState>();
+    let mut current = state
+        .settings
+        .write()
+        .map_err(|_| "settings lock poisoned")?;
+    let mut next = edit(&current)?;
+    next.sanitize();
+
+    let autostart_changed = next.autostart != current.autostart;
+    if autostart_changed {
+        next.autostart =
+            crate::autostart::set_enabled(next.autostart).map_err(|err| err.to_string())?;
+    }
+    if let Err(err) = persist(app, &next) {
+        if autostart_changed {
+            if let Err(rollback) = crate::autostart::set_enabled(current.autostart) {
+                current.autostart = crate::autostart::is_enabled();
+                return Err(format!("{err}; autostart rollback failed: {rollback}"));
+            }
+        }
+        return Err(err);
+    }
+    *current = next.clone();
+    Ok(next)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_settings_keep_explicit_choices_for_clock_and_capsule() {
+        let json = r#"{"clockEnabled":true,"clockZone":"Iran Standard Time","capsuleEnabled":true,"digits":"en"}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert!(settings.clock_enabled);
+        assert_eq!(settings.clock_zone, "Iran Standard Time");
+        assert_eq!(settings.clock_minute_color, None);
+        assert!(!settings.clock_seconds);
+        assert_eq!(settings.clock_second_color, None);
+        assert_eq!(settings.calendar_day_color, None);
+        assert!(settings.capsule_enabled);
+        assert_eq!(settings.capsule_interval_seconds, 60);
+    }
+
+    #[test]
+    fn blank_settings_open_with_native_date_and_no_extra_clock() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.fa_digits());
+        assert!(!settings.clock_enabled);
+        assert!(!settings.capsule_enabled);
+    }
+
+    #[test]
+    fn validates_independent_colors_and_the_rotation_interval() {
+        let mut settings = Settings {
+            clock_hour_color: Some("#7046ab".into()),
+            clock_minute_color: Some("invalid".into()),
+            clock_second_color: Some("#c3aa11".into()),
+            calendar_day_color: Some("#e01caa".into()),
+            capsule_interval_seconds: 2000,
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.clock_hour_color.as_deref(), Some("#7046ab"));
+        assert_eq!(settings.clock_minute_color, None);
+        assert_eq!(settings.clock_second_color.as_deref(), Some("#c3aa11"));
+        assert_eq!(settings.calendar_day_color.as_deref(), Some("#e01caa"));
+        assert_eq!(settings.capsule_interval_seconds, 1800);
+    }
 
     #[test]
     fn defaults_include_a_zero_lunar_offset() {
@@ -228,20 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn removed_day_month_tray_mode_falls_back_to_day() {
-        // `dayMonth` was removed; an old settings file must still load.
-        let json = r#"{"trayIconMode":"dayMonth","theme":"dark"}"#;
-        let settings: Settings = serde_json::from_str(json).expect("legacy tray mode parses");
-        assert_eq!(settings.tray_icon_mode, TrayIconMode::Day);
+    fn upgrades_old_settings_to_inline_clock_and_preserves_colors() {
+        let json = r##"{"trayIconMode":"day","theme":"dark","clockHourColor":"#d9485f"}"##;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.clock_layout, ClockLayout::Inline);
+        assert_eq!(settings.clock_hour_color.as_deref(), Some("#d9485f"));
         assert_eq!(settings.theme, ThemeMode::Dark);
-    }
-
-    #[test]
-    fn tray_mode_round_trips_as_camel_case() {
-        let mut settings = Settings::default();
-        settings.tray_icon_mode = TrayIconMode::Static;
-        let value = serde_json::to_value(&settings).expect("settings serialize");
-        assert_eq!(value["trayIconMode"], "static");
     }
 
     #[test]
